@@ -2,6 +2,8 @@ const User = require("../models/User");
 const Product = require("../models/Product");
 const Category = require("../models/Category");
 const Order = require("../models/Order");
+const Banner = require("../models/Banner");
+const { defaultBanners } = require("../controllers/bannerController");
 
 const defaultUsers = [
   {
@@ -373,6 +375,13 @@ const seedDefaultDataIfEmpty = async () => {
         await Product.create(prod);
       }
       console.log(`[Auto-Seeder] Seeded ${defaultProducts.length} baby clothing products`);
+    }
+
+    const bannerCount = await Banner.countDocuments();
+    if (bannerCount === 0 && Array.isArray(defaultBanners) && defaultBanners.length > 0) {
+      console.log("[Auto-Seeder] Seeding default hero banners...");
+      await Banner.insertMany(defaultBanners);
+      console.log(`[Auto-Seeder] Seeded ${defaultBanners.length} hero banner slides`);
     }
   } catch (error) {
     console.error("[Auto-Seeder Error]:", error.message);
