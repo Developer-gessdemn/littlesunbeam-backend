@@ -81,13 +81,13 @@ reviewSchema.statics.recalculateProductRating = async function (productId) {
 
       return { rating: avgRating, reviewCount: totalReviews };
     } else {
-      // If no reviews left, reset to default 5.0 and 0 count
+      // If no reviews left, reset to 0 rating and 0 count
       await Product.findByIdAndUpdate(pId, {
-        rating: 5.0,
+        rating: 0,
         reviewCount: 0,
       });
 
-      return { rating: 5.0, reviewCount: 0 };
+      return { rating: 0, reviewCount: 0 };
     }
   } catch (error) {
     console.error(`[Review Aggregation Error for Product ${productId}]:`, error.message);

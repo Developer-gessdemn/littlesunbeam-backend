@@ -1,4 +1,4 @@
-﻿const mongoose = require('mongoose');
+const mongoose = require('mongoose');
 const dotenv = require('dotenv');
 dotenv.config();
 
@@ -11,6 +11,7 @@ const cleanDatabase = async () => {
     const User = require('./models/User');
     const Product = require('./models/Product');
     const Order = require('./models/Order');
+    const Review = require('./models/Review');
 
     const dummyProductSkus = [
       'GHFT95245AAA',
@@ -60,14 +61,19 @@ const cleanDatabase = async () => {
     });
     console.log('[Cleanup] Deleted ' + deletedOrders.deletedCount + ' dummy orders.');
 
-    const remainingProducts = await Product.find({}, 'name sku price');
+    const deletedReviews = await Review.deleteMany({});
+    console.log('[Cleanup] Deleted ' + deletedReviews.deletedCount + ' dummy/test reviews.');
+
+    const remainingProducts = await Product.find({}, 'name sku price rating reviewCount');
     const remainingUsers = await User.find({}, 'name email role');
     const remainingOrders = await Order.find({}, 'orderNumber totalAmount user').populate('user', 'name email');
+    const remainingReviews = await Review.find({});
 
     console.log('\n--- REMAINING REAL DATABASE DATA ---');
     console.log('Real Products Count:', remainingProducts.length, remainingProducts);
     console.log('Real Users Count:', remainingUsers.length, remainingUsers);
     console.log('Real Orders Count:', remainingOrders.length, remainingOrders);
+    console.log('Real Reviews Count:', remainingReviews.length, remainingReviews);
     console.log('------------------------------------\n');
 
     process.exit(0);

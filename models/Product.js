@@ -235,7 +235,7 @@ const productSchema = new mongoose.Schema(
       default: "In Stock",
     },
 
-    // Images
+    // Images & Videos (Watch to Shop)
     image: {
       type: String,
       default: "",
@@ -247,6 +247,15 @@ const productSchema = new mongoose.Schema(
     images: {
       type: productImagesSchema,
       default: () => ({}),
+    },
+    video: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+    videos: {
+      type: [String],
+      default: [],
     },
 
     // Color-based Product Variants (Color -> Images + Sizes + Size-wise Inventory)
@@ -324,7 +333,7 @@ const productSchema = new mongoose.Schema(
     },
     rating: {
       type: Number,
-      default: 5.0,
+      default: 0,
       min: [0, "Rating cannot be less than 0"],
       max: [5, "Rating cannot be more than 5"],
     },
@@ -460,6 +469,22 @@ productSchema.pre("save", function (next) {
     if (!this.images.main && this.image) {
       this.images.main = this.image;
     }
+  }
+
+  // Sync video and videos (Watch to Shop)
+  if (Array.isArray(this.videos) && this.videos.length > 0) {
+    this.videos = this.videos.map((v) => (typeof v === "string" ? v.trim() : "")).filter(Boolean);
+    if (!this.video && this.videos.length > 0) {
+      this.video = this.videos[0];
+    } else if (this.video && !this.videos.includes(this.video)) {
+      this.videos.unshift(this.video);
+    }
+  } else if (this.video && this.video.trim()) {
+    this.video = this.video.trim();
+    this.videos = [this.video];
+  } else {
+    this.video = "";
+    this.videos = [];
   }
 
   // Sync isActive with status
