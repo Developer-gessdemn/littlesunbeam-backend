@@ -3,11 +3,16 @@ const upload = require("../middleware/uploadMiddleware");
 const {
   uploadSingleImage,
   uploadMultipleImages,
+  resolveInstagramMedia,
 } = require("../controllers/uploadController");
 const { protect } = require("../middleware/authMiddleware");
 const { admin } = require("../middleware/adminMiddleware");
 
 const router = express.Router();
+
+// Resolve Instagram Reel/Post URL to direct playable video URL via Meta API
+router.post("/resolve-instagram", resolveInstagramMedia);
+
 
 // General single file upload (supports 'image', 'video', 'file')
 router.post(
