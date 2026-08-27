@@ -25,6 +25,7 @@ const uploadRoutes = require("./routes/uploadRoutes");
 const printRoutes = require("./routes/printRoutes");
 const reviewRoutes = require("./routes/reviewRoutes");
 const bannerRoutes = require("./routes/bannerRoutes");
+const settingsRoutes = require("./routes/settingsRoutes");
 
 // Initialize MongoDB connection
 connectDB();
@@ -108,6 +109,7 @@ app.use("/api/admin", adminRoutes);
 app.use("/api/upload", uploadRoutes);
 app.use("/api/prints", printRoutes);
 app.use("/api/banners", bannerRoutes);
+app.use("/api/settings", settingsRoutes);
 
 // Error Handling Middleware
 app.use(notFound);

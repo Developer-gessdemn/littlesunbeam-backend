@@ -205,6 +205,11 @@ const productSchema = new mongoose.Schema(
       },
       min: [0, "MRP cannot be negative"],
     },
+    manufacturingCost: {
+      type: Number,
+      default: 0,
+      min: [0, "Manufacturing cost cannot be negative"],
+    },
     discount: {
       type: Number,
       default: 0,
@@ -247,6 +252,11 @@ const productSchema = new mongoose.Schema(
     images: {
       type: productImagesSchema,
       default: () => ({}),
+    },
+    sizeChartImage: {
+      type: String,
+      trim: true,
+      default: "",
     },
     video: {
       type: String,

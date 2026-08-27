@@ -319,6 +319,7 @@ const createProduct = async (req, res, next) => {
       image,
       gallery,
       images,
+      sizeChartImage,
       video,
       videos,
       colors,
@@ -568,6 +569,7 @@ const createProduct = async (req, res, next) => {
       image: mainImg,
       gallery: imgGallery,
       images: structuredImages,
+      sizeChartImage: sizeChartImage && typeof sizeChartImage === "string" ? sizeChartImage.trim() : "",
       video: video ? String(video).trim() : (Array.isArray(videos) && videos[0] ? String(videos[0]).trim() : ""),
       videos: Array.isArray(videos) ? videos.map((v) => String(v).trim()).filter(Boolean) : (video ? [String(video).trim()] : []),
       colorVariants: formattedColorVariants,
@@ -802,6 +804,10 @@ const updateProduct = async (req, res, next) => {
       } else {
         updates.isActive = true;
       }
+    }
+
+    if (updates.sizeChartImage !== undefined) {
+      updates.sizeChartImage = typeof updates.sizeChartImage === "string" ? updates.sizeChartImage.trim() : "";
     }
 
     Object.assign(product, updates);
