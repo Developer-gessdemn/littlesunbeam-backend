@@ -33,6 +33,9 @@ connectDB();
 
 const app = express();
 
+// Trust reverse proxy (Nginx / Cloudflare / Hostinger)
+app.set("trust proxy", 1);
+
 // Security HTTP headers
 app.use(
   helmet({
