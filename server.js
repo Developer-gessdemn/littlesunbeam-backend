@@ -1,5 +1,6 @@
 const express = require("express");
 const path = require("path");
+const fs = require("fs");
 const cors = require("cors");
 const helmet = require("helmet");
 const morgan = require("morgan");
@@ -42,7 +43,7 @@ app.use(
 // CORS configuration
 const allowedOrigins = process.env.FRONTEND_URL
   ? process.env.FRONTEND_URL.split(",").map((url) => url.trim())
-  : ["http://localhost:5173", "http://localhost:3000", "https://littlesunbeam.in",];
+  : ["http://localhost:5173", "http://localhost:3000", "https://littlesunbeam.in", "http://localhost:3000",];
 
 app.use(
   cors({
@@ -110,6 +111,18 @@ app.use("/api/upload", uploadRoutes);
 app.use("/api/prints", printRoutes);
 app.use("/api/banners", bannerRoutes);
 app.use("/api/settings", settingsRoutes);
+
+// Serve frontend build in production if available
+const frontendDist = path.join(__dirname, "../frontend/dist");
+if (fs.existsSync(frontendDist)) {
+  app.use(express.static(frontendDist));
+  app.get("*", (req, res, next) => {
+    if (req.path.startsWith("/api") || req.path.startsWith("/uploads")) {
+      return next();
+    }
+    res.sendFile(path.join(frontendDist, "index.html"));
+  });
+}
 
 // Error Handling Middleware
 app.use(notFound);
