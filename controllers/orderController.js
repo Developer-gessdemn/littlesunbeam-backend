@@ -223,7 +223,7 @@ const createOrder = async (req, res, next) => {
     } else {
       // If Razorpay payment info is provided, verify the cryptographic signature
       if (razorpay_order_id && razorpay_payment_id && razorpay_signature) {
-        const keySecret = process.env.RAZORPAY_KEY_SECRET || "HgY9N9qekQtjTsmchnkj4Eql";
+        const keySecret = process.env.RAZORPAY_KEY_SECRET || "z4xxsShuvwDSTyrj8iZvBQg6";
         const hmac = crypto.createHmac("sha256", keySecret);
         hmac.update(`${razorpay_order_id}|${razorpay_payment_id}`);
         const generatedSignature = hmac.digest("hex");
@@ -501,7 +501,7 @@ const createRazorpayOrder = async (req, res, next) => {
         orderId: razorpayOrder.id,
         amount: razorpayOrder.amount,
         currency: razorpayOrder.currency,
-        keyId: process.env.RAZORPAY_KEY_ID || "rzp_test_TTYFrGlH8NWdDV",
+        keyId: process.env.RAZORPAY_KEY_ID || "rzp_live_TaDwCOE6e7ioNi",
       },
     });
   } catch (error) {
@@ -520,7 +520,7 @@ const getRazorpayKey = async (req, res) => {
   return res.status(200).json({
     success: true,
     data: {
-      keyId: process.env.RAZORPAY_KEY_ID || "rzp_test_TTYFrGlH8NWdDV",
+      keyId: process.env.RAZORPAY_KEY_ID || "rzp_live_TaDwCOE6e7ioNi",
     },
   });
 };
