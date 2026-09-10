@@ -54,6 +54,41 @@ const orderAddressSchema = new mongoose.Schema(
   { _id: false }
 );
 
+const trackingCheckpointSchema = new mongoose.Schema(
+  {
+    status: {
+      type: String,
+      required: true,
+      default: "In Transit",
+    },
+    location: {
+      type: String,
+      default: "",
+    },
+    description: {
+      type: String,
+      required: true,
+    },
+    date: {
+      type: String,
+      default: "",
+    },
+    time: {
+      type: String,
+      default: "",
+    },
+    timestamp: {
+      type: Date,
+      default: Date.now,
+    },
+    updatedBy: {
+      type: String,
+      default: "Admin",
+    },
+  },
+  { _id: true }
+);
+
 const orderSchema = new mongoose.Schema(
   {
     orderNumber: {
@@ -103,12 +138,41 @@ const orderSchema = new mongoose.Schema(
         "Pending",
         "Confirmed",
         "Processing",
+        "Packed",
         "Shipped",
+        "Out for Delivery",
         "Delivered",
         "Cancelled",
       ],
       default: "Pending",
       index: true,
+    },
+    // Courier & Manual Tracking Information
+    courierName: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+    trackingNumber: {
+      type: String,
+      default: "",
+      trim: true,
+      index: true,
+    },
+    trackingUrl: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+    shippingDate: {
+      type: Date,
+    },
+    expectedDeliveryDate: {
+      type: Date,
+    },
+    trackingHistory: {
+      type: [trackingCheckpointSchema],
+      default: [],
     },
     subtotal: {
       type: Number,
@@ -146,6 +210,12 @@ const orderSchema = new mongoose.Schema(
       type: Date,
     },
     shippedAt: {
+      type: Date,
+    },
+    packedAt: {
+      type: Date,
+    },
+    outForDeliveryAt: {
       type: Date,
     },
   },

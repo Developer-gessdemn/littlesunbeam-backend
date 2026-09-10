@@ -5,6 +5,7 @@ const Cart = require("../models/Cart");
 const User = require("../models/User");
 const { getRazorpayInstance } = require("../config/razorpay");
 const { isValidObjectId } = require("../utils/validators");
+const { sendOrderMilestoneEmail } = require("../utils/emailService");
 
 const FREE_SHIPPING_THRESHOLD = 2499;
 
@@ -367,6 +368,27 @@ const createOrder = async (req, res, next) => {
       console.warn("[orderController] Could not sync shipping address to user account:", syncErr.message);
     }
 
+    // Add initial tracking checkpoint to tracking history
+    try {
+      order.trackingHistory.push({
+        status: "Order Confirmed",
+        location: "Little Sunbeam Tiruppur Facility",
+        description: "Order verified and sent to warehouse fulfillment queue",
+        date: new Date().toISOString().split("T")[0],
+        time: new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }),
+        timestamp: new Date(),
+        updatedBy: "System",
+      });
+      await order.save();
+    } catch (histErr) {
+      console.warn("[orderController] Could not log initial tracking checkpoint:", histErr.message);
+    }
+
+    // Trigger asynchronous order confirmation email notification
+    sendOrderMilestoneEmail({ order, type: "Confirmed" }).catch((emailErr) => {
+      console.warn("[orderController] Async confirmation email note:", emailErr.message);
+    });
+
     return res.status(201).json({
       success: true,
       message: "Order placed successfully",
@@ -503,11 +525,127 @@ const getRazorpayKey = async (req, res) => {
   });
 };
 
+// @desc    Public order tracking lookup by Order ID/Number + Email/Phone
+// @route   POST /api/orders/track or GET /api/orders/track
+// @access  Public
+const trackOrderPublic = async (req, res, next) => {
+  try {
+    const rawOrderNumber = (req.body?.orderNumber || req.query?.orderNumber || "").trim();
+    const rawContact = (req.body?.contact || req.query?.contact || "").trim();
+
+    if (!rawOrderNumber || !rawContact) {
+      return res.status(400).json({
+        success: false,
+        message: "Please enter both Order ID/Number and your Registered Email or Mobile Number.",
+      });
+    }
+
+    let order = null;
+    if (isValidObjectId(rawOrderNumber)) {
+      order = await Order.findById(rawOrderNumber).populate("items.product", "name image sku price");
+    } else {
+      const cleanOrdNum = rawOrderNumber.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      order = await Order.findOne({
+        orderNumber: { $regex: new RegExp(`^${cleanOrdNum}$`, "i") },
+      }).populate("items.product", "name image sku price");
+    }
+
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: `No order found with number "${rawOrderNumber}". Please double-check your Order ID.`,
+      });
+    }
+
+    // Verify contact info against the order shipping details & user account
+    const cleanInputContact = rawContact.toLowerCase().trim();
+    const cleanInputDigits = rawContact.replace(/\D/g, "");
+
+    const orderEmail = (order.shippingAddress?.email || "").toLowerCase().trim();
+    const orderPhoneDigits = (order.shippingAddress?.phone || "").replace(/\D/g, "");
+
+    const isEmailMatch =
+      cleanInputContact.includes("@") &&
+      (orderEmail === cleanInputContact ||
+        orderEmail.includes(cleanInputContact) ||
+        cleanInputContact.includes(orderEmail));
+
+    let isPhoneMatch = false;
+    if (cleanInputDigits.length >= 6 && orderPhoneDigits.length >= 6) {
+      const minLen = Math.min(10, Math.min(cleanInputDigits.length, orderPhoneDigits.length));
+      const inSuffix = cleanInputDigits.slice(-minLen);
+      const ordSuffix = orderPhoneDigits.slice(-minLen);
+      isPhoneMatch = inSuffix === ordSuffix;
+    }
+
+    if (!isEmailMatch && !isPhoneMatch) {
+      return res.status(401).json({
+        success: false,
+        message: "The Email or Mobile Number does not match the records for this Order Number.",
+      });
+    }
+
+    // Sort tracking history with newest first for the timeline
+    const trackingHistory = [...(order.trackingHistory || [])].sort((a, b) => {
+      const timeA = new Date(a.timestamp || a.date || 0).getTime();
+      const timeB = new Date(b.timestamp || b.date || 0).getTime();
+      return timeB - timeA;
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Order tracking details retrieved successfully",
+      data: {
+        order: {
+          _id: order._id,
+          orderNumber: order.orderNumber,
+          orderStatus: order.orderStatus,
+          paymentStatus: order.paymentStatus,
+          paymentMethod: order.paymentMethod,
+          courierName: order.courierName || "",
+          trackingNumber: order.trackingNumber || "",
+          trackingUrl: order.trackingUrl || "",
+          shippingDate: order.shippingDate || order.shippedAt || null,
+          expectedDeliveryDate: order.expectedDeliveryDate || null,
+          deliveredAt: order.deliveredAt || null,
+          shippedAt: order.shippedAt || null,
+          packedAt: order.packedAt || null,
+          outForDeliveryAt: order.outForDeliveryAt || null,
+          items: (order.items || []).map((item) => ({
+            name: item.name,
+            image: item.image,
+            price: item.price,
+            quantity: item.quantity,
+            selectedSize: item.selectedSize || item.size || "Standard",
+            selectedColor: item.selectedColor || item.color || "Default",
+          })),
+          subtotal: order.subtotal,
+          discount: order.discount,
+          shippingCharge: order.shippingCharge,
+          totalAmount: order.totalAmount,
+          shippingAddress: {
+            name: order.shippingAddress?.name || "Customer",
+            city: order.shippingAddress?.city || "",
+            state: order.shippingAddress?.state || "",
+            pincode: order.shippingAddress?.pincode || "",
+          },
+          trackingHistory,
+          createdAt: order.createdAt,
+          updatedAt: order.updatedAt,
+        },
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   createOrder,
   getMyOrders,
   getOrderById,
   createRazorpayOrder,
   getRazorpayKey,
+  trackOrderPublic,
 };
 

@@ -6,6 +6,10 @@ const siteSettingsSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+    standardSizeChartEnabled: {
+      type: Boolean,
+      default: true,
+    },
   },
   {
     timestamps: true,
@@ -17,7 +21,7 @@ const siteSettingsSchema = new mongoose.Schema(
 siteSettingsSchema.statics.getSettings = async function () {
   let settings = await this.findOne();
   if (!settings) {
-    settings = await this.create({ codEnabled: true });
+    settings = await this.create({ codEnabled: true, standardSizeChartEnabled: true });
   }
   return settings;
 };

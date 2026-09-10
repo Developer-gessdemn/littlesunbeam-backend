@@ -13,13 +13,14 @@ router.get("/", async (req, res) => {
       success: true,
       data: {
         codEnabled: settings.codEnabled !== false,
+        standardSizeChartEnabled: settings.standardSizeChartEnabled !== false,
       },
     });
   } catch (error) {
     res.status(500).json({
       success: false,
       message: error.message || "Failed to fetch settings",
-      data: { codEnabled: true },
+      data: { codEnabled: true, standardSizeChartEnabled: true },
     });
   }
 });
@@ -27,13 +28,19 @@ router.get("/", async (req, res) => {
 // PUT /api/settings - Admin only
 router.put("/", protect, admin, async (req, res) => {
   try {
-    const { codEnabled } = req.body;
+    const { codEnabled, standardSizeChartEnabled } = req.body;
     let settings = await SiteSettings.findOne();
     if (!settings) {
-      settings = new SiteSettings({ codEnabled: codEnabled !== false });
+      settings = new SiteSettings({
+        codEnabled: codEnabled !== false,
+        standardSizeChartEnabled: standardSizeChartEnabled !== false,
+      });
     } else {
       if (codEnabled !== undefined) {
         settings.codEnabled = Boolean(codEnabled);
+      }
+      if (standardSizeChartEnabled !== undefined) {
+        settings.standardSizeChartEnabled = Boolean(standardSizeChartEnabled);
       }
     }
     await settings.save();
@@ -41,7 +48,8 @@ router.put("/", protect, admin, async (req, res) => {
       success: true,
       message: "Settings updated successfully",
       data: {
-        codEnabled: settings.codEnabled,
+        codEnabled: settings.codEnabled !== false,
+        standardSizeChartEnabled: settings.standardSizeChartEnabled !== false,
       },
     });
   } catch (error) {

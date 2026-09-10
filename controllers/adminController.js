@@ -3,6 +3,7 @@ const Product = require("../models/Product");
 const User = require("../models/User");
 const Category = require("../models/Category");
 const { isValidObjectId } = require("../utils/validators");
+const { sendOrderMilestoneEmail } = require("../utils/emailService");
 
 // @desc    Get complete admin dashboard analytics
 // @route   GET /api/admin/dashboard
@@ -202,13 +203,13 @@ const getAdminOrderById = async (req, res, next) => {
 const updateOrderStatus = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { orderStatus, paymentStatus, cancelledReason } = req.body;
+    const { orderStatus, paymentStatus, cancelledReason, customMessage, sendNotification = true } = req.body;
 
     let order = null;
     if (isValidObjectId(id)) {
-      order = await Order.findById(id);
+      order = await Order.findById(id).populate("user", "name email phone");
     } else {
-      order = await Order.findOne({ orderNumber: id });
+      order = await Order.findOne({ orderNumber: id }).populate("user", "name email phone");
     }
 
     if (!order) {
@@ -219,12 +220,22 @@ const updateOrderStatus = async (req, res, next) => {
     }
 
     const previousStatus = order.orderStatus;
+    const isStatusChanging = orderStatus && orderStatus !== previousStatus;
 
     if (orderStatus) {
       order.orderStatus = orderStatus;
 
-      if (orderStatus === "Shipped" && !order.shippedAt) {
-        order.shippedAt = new Date();
+      if (orderStatus === "Packed" && !order.packedAt) {
+        order.packedAt = new Date();
+      }
+
+      if (orderStatus === "Shipped") {
+        if (!order.shippedAt) order.shippedAt = new Date();
+        if (!order.shippingDate) order.shippingDate = new Date();
+      }
+
+      if (orderStatus === "Out for Delivery" && !order.outForDeliveryAt) {
+        order.outForDeliveryAt = new Date();
       }
 
       if (orderStatus === "Delivered") {
@@ -241,6 +252,39 @@ const updateOrderStatus = async (req, res, next) => {
           });
         }
       }
+
+      // Automatically append an entry to tracking history if status changed
+      if (isStatusChanging) {
+        const descriptions = {
+          Confirmed: "Order confirmed and sent to warehouse fulfillment queue",
+          Processing: "Order is being processed and prepared for packing",
+          Packed: "Order items have been quality-checked, sanitized, and packed into Little Sunbeam eco-box",
+          Shipped: `Order handed over to ${order.courierName || "courier partner"} for transit`,
+          "Out for Delivery": "Package has reached local hub and is out for delivery with executive",
+          Delivered: "Shipment delivered to customer",
+          Cancelled: cancelledReason ? `Order cancelled: ${cancelledReason}` : "Order cancelled",
+        };
+
+        const locs = {
+          Confirmed: "Little Sunbeam Facility",
+          Processing: "Tiruppur Fulfillment Center",
+          Packed: "Tiruppur Packing Unit",
+          Shipped: "Dispatched Hub",
+          "Out for Delivery": "Destination Delivery Hub",
+          Delivered: "Delivery Address",
+          Cancelled: "Support Center",
+        };
+
+        order.trackingHistory.push({
+          status: orderStatus,
+          location: locs[orderStatus] || "Hub",
+          description: descriptions[orderStatus] || `Status updated to ${orderStatus}`,
+          date: new Date().toISOString().split("T")[0],
+          time: new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }),
+          timestamp: new Date(),
+          updatedBy: "Admin",
+        });
+      }
     }
 
     if (paymentStatus) {
@@ -249,11 +293,237 @@ const updateOrderStatus = async (req, res, next) => {
 
     const updatedOrder = await order.save();
 
+    // Trigger milestone notification email if applicable
+    if (isStatusChanging && sendNotification && ["Confirmed", "Packed", "Shipped", "Out for Delivery", "Delivered"].includes(orderStatus)) {
+      sendOrderMilestoneEmail({ order: updatedOrder, type: orderStatus, customMessage }).catch((err) => {
+        console.warn(`[adminController] Async milestone email (${orderStatus}) error:`, err.message);
+      });
+    }
+
     return res.status(200).json({
       success: true,
-      message: "Order status updated successfully",
+      message: `Order status updated to "${orderStatus || updatedOrder.orderStatus}" successfully`,
       data: {
         order: updatedOrder,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc    Update manual courier and tracking details for an order
+// @route   PUT /api/admin/orders/:id/courier
+// @access  Private/Admin
+const updateOrderCourierDetails = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const {
+      courierName,
+      trackingNumber,
+      trackingUrl,
+      shippingDate,
+      expectedDeliveryDate,
+      orderStatus,
+      newCheckpointLocation,
+      newCheckpointDescription,
+      sendNotification = true,
+      customMessage = "",
+    } = req.body;
+
+    let order = null;
+    if (isValidObjectId(id)) {
+      order = await Order.findById(id).populate("user", "name email phone");
+    } else {
+      order = await Order.findOne({ orderNumber: id }).populate("user", "name email phone");
+    }
+
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: "Order not found",
+      });
+    }
+
+    const previousStatus = order.orderStatus;
+
+    // Update courier fields
+    if (courierName !== undefined) order.courierName = courierName.trim();
+    if (trackingNumber !== undefined) order.trackingNumber = trackingNumber.trim();
+    if (trackingUrl !== undefined) order.trackingUrl = trackingUrl.trim();
+    if (shippingDate !== undefined && shippingDate !== "") order.shippingDate = new Date(shippingDate);
+    if (expectedDeliveryDate !== undefined && expectedDeliveryDate !== "") {
+      order.expectedDeliveryDate = new Date(expectedDeliveryDate);
+    }
+
+    // If order status is also updated
+    if (orderStatus && orderStatus !== previousStatus) {
+      order.orderStatus = orderStatus;
+      if (orderStatus === "Packed" && !order.packedAt) order.packedAt = new Date();
+      if (orderStatus === "Shipped") {
+        if (!order.shippedAt) order.shippedAt = new Date();
+        if (!order.shippingDate) order.shippingDate = new Date();
+      }
+      if (orderStatus === "Out for Delivery" && !order.outForDeliveryAt) order.outForDeliveryAt = new Date();
+      if (orderStatus === "Delivered") {
+        if (!order.deliveredAt) order.deliveredAt = new Date();
+        order.paymentStatus = "Paid";
+      }
+    }
+
+    // If new checkpoint description is provided, append manual tracking update
+    if (newCheckpointDescription && newCheckpointDescription.trim()) {
+      order.trackingHistory.push({
+        status: orderStatus || order.orderStatus || "In Transit",
+        location: (newCheckpointLocation || "").trim(),
+        description: newCheckpointDescription.trim(),
+        date: new Date().toISOString().split("T")[0],
+        time: new Date().toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }),
+        timestamp: new Date(),
+        updatedBy: "Admin",
+      });
+    }
+
+    const updatedOrder = await order.save();
+
+    // Trigger milestone notification email if status changed to a major milestone
+    if (orderStatus && orderStatus !== previousStatus && sendNotification && ["Confirmed", "Packed", "Shipped", "Out for Delivery", "Delivered"].includes(orderStatus)) {
+      sendOrderMilestoneEmail({ order: updatedOrder, type: orderStatus, customMessage }).catch((err) => {
+        console.warn(`[adminController] Async milestone email (${orderStatus}) error:`, err.message);
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Courier and tracking details updated successfully",
+      data: {
+        order: updatedOrder,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc    Add manual tracking history checkpoint
+// @route   POST /api/admin/orders/:id/tracking
+// @access  Private/Admin
+const addTrackingHistoryUpdate = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const {
+      status,
+      location,
+      description,
+      date,
+      time,
+      updateOrderStatusTo,
+      sendNotification = false,
+      customMessage = "",
+    } = req.body;
+
+    if (!description || !description.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: "Please provide a tracking activity description.",
+      });
+    }
+
+    let order = null;
+    if (isValidObjectId(id)) {
+      order = await Order.findById(id).populate("user", "name email phone");
+    } else {
+      order = await Order.findOne({ orderNumber: id }).populate("user", "name email phone");
+    }
+
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: "Order not found",
+      });
+    }
+
+    const now = new Date();
+    const entryDate = date || now.toISOString().split("T")[0];
+    const entryTime = time || now.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" });
+
+    // Append to tracking history
+    order.trackingHistory.push({
+      status: status || order.orderStatus || "In Transit",
+      location: (location || "").trim(),
+      description: description.trim(),
+      date: entryDate,
+      time: entryTime,
+      timestamp: date && time ? new Date(`${date}T${time}`) : now,
+      updatedBy: "Admin",
+    });
+
+    const previousStatus = order.orderStatus;
+    if (updateOrderStatusTo && updateOrderStatusTo !== previousStatus) {
+      order.orderStatus = updateOrderStatusTo;
+      if (updateOrderStatusTo === "Packed" && !order.packedAt) order.packedAt = new Date();
+      if (updateOrderStatusTo === "Shipped" && !order.shippedAt) order.shippedAt = new Date();
+      if (updateOrderStatusTo === "Out for Delivery" && !order.outForDeliveryAt) order.outForDeliveryAt = new Date();
+      if (updateOrderStatusTo === "Delivered") {
+        if (!order.deliveredAt) order.deliveredAt = new Date();
+        order.paymentStatus = "Paid";
+      }
+    }
+
+    const updatedOrder = await order.save();
+
+    if (sendNotification && updateOrderStatusTo && ["Confirmed", "Packed", "Shipped", "Out for Delivery", "Delivered"].includes(updateOrderStatusTo)) {
+      sendOrderMilestoneEmail({ order: updatedOrder, type: updateOrderStatusTo, customMessage }).catch((err) => {
+        console.warn(`[adminController] Async milestone email error:`, err.message);
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Tracking checkpoint added to timeline successfully",
+      data: {
+        order: updatedOrder,
+        trackingHistory: updatedOrder.trackingHistory,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc    Delete a specific tracking history checkpoint
+// @route   DELETE /api/admin/orders/:id/tracking/:updateId
+// @access  Private/Admin
+const deleteTrackingHistoryUpdate = async (req, res, next) => {
+  try {
+    const { id, updateId } = req.params;
+
+    let order = null;
+    if (isValidObjectId(id)) {
+      order = await Order.findById(id);
+    } else {
+      order = await Order.findOne({ orderNumber: id });
+    }
+
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: "Order not found",
+      });
+    }
+
+    order.trackingHistory = (order.trackingHistory || []).filter(
+      (entry) => String(entry._id) !== String(updateId)
+    );
+
+    const updatedOrder = await order.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "Tracking checkpoint removed successfully",
+      data: {
+        order: updatedOrder,
+        trackingHistory: updatedOrder.trackingHistory,
       },
     });
   } catch (error) {
@@ -425,6 +695,9 @@ module.exports = {
   getAllOrders,
   getAdminOrderById,
   updateOrderStatus,
+  updateOrderCourierDetails,
+  addTrackingHistoryUpdate,
+  deleteTrackingHistoryUpdate,
   getAllUsers,
   updateUserStatus,
   seedDatabase,

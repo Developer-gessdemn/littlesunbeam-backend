@@ -258,6 +258,10 @@ const productSchema = new mongoose.Schema(
       trim: true,
       default: "",
     },
+    showStandardSizeChart: {
+      type: Boolean,
+      default: true,
+    },
     video: {
       type: String,
       trim: true,

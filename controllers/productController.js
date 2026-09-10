@@ -137,8 +137,15 @@ const getProducts = async (req, res, next) => {
       const ageArray = Array.isArray(age)
         ? age
         : age.split(",").map((a) => a.trim());
+      const expandedAges = [];
+      ageArray.forEach((a) => {
+        expandedAges.push(a);
+        if (a.toLowerCase() === "1 - 4 years") {
+          expandedAges.push("1 - 2 Years", "2 - 3 Years", "3 - 4 Years", "2 - 4 Years");
+        }
+      });
       query.ageGroup = {
-        $in: ageArray.map((a) => new RegExp(a, "i")),
+        $in: expandedAges.map((a) => new RegExp(a, "i")),
       };
     }
 
@@ -320,6 +327,7 @@ const createProduct = async (req, res, next) => {
       gallery,
       images,
       sizeChartImage,
+      showStandardSizeChart,
       video,
       videos,
       colors,
@@ -570,6 +578,7 @@ const createProduct = async (req, res, next) => {
       gallery: imgGallery,
       images: structuredImages,
       sizeChartImage: sizeChartImage && typeof sizeChartImage === "string" ? sizeChartImage.trim() : "",
+      showStandardSizeChart: showStandardSizeChart !== undefined ? Boolean(showStandardSizeChart) : true,
       video: video ? String(video).trim() : (Array.isArray(videos) && videos[0] ? String(videos[0]).trim() : ""),
       videos: Array.isArray(videos) ? videos.map((v) => String(v).trim()).filter(Boolean) : (video ? [String(video).trim()] : []),
       colorVariants: formattedColorVariants,
@@ -808,6 +817,10 @@ const updateProduct = async (req, res, next) => {
 
     if (updates.sizeChartImage !== undefined) {
       updates.sizeChartImage = typeof updates.sizeChartImage === "string" ? updates.sizeChartImage.trim() : "";
+    }
+
+    if (updates.showStandardSizeChart !== undefined) {
+      updates.showStandardSizeChart = Boolean(updates.showStandardSizeChart);
     }
 
     Object.assign(product, updates);
