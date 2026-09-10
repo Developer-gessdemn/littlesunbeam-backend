@@ -14,7 +14,7 @@ const users = [
     name: "Admin User",
     email: "admin@littlesunbeam.com",
     password: "Admin@123456",
-    phone: "+91 98765 43210",
+    phone: "+91 90255 59837",
     role: "admin",
     address: {
       street: "10 Sunbeam Plaza, MG Road",

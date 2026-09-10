@@ -7,10 +7,24 @@ const { defaultBanners } = require("../controllers/bannerController");
 
 const defaultUsers = [
   {
+    name: "Little Sunbeam Admin",
+    email: "littlesunbeamkidswear@gmail.com",
+    password: "Admin@123456",
+    phone: "+91 90255 59837",
+    role: "admin",
+    address: {
+      street: "1/95m Bandari Nagar, Veerapandi",
+      city: "Tiruppur",
+      state: "Tamil Nadu",
+      pincode: "641605",
+      country: "India",
+    },
+  },
+  {
     name: "Admin User",
     email: "admin@littlesunbeam.com",
     password: "Admin@123456",
-    phone: "+91 98765 43210",
+    phone: "+91 90255 59837",
     role: "admin",
     address: {
       street: "10 Sunbeam Plaza, MG Road",

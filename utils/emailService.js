@@ -381,7 +381,7 @@ const generateOrderHtml = (order, type, customMessage = "") => {
                 Have questions or need assistance with your shipment?
               </p>
               <p style="margin: 0 0 16px 0; font-size: 12px; color: #6B7280;">
-                WhatsApp: <strong style="color: #111827;">+91 93615 03943</strong> &nbsp;·&nbsp; Email: <strong style="color: #111827;">littlesunbeamkidswear@gmail.com</strong>
+                WhatsApp: <strong style="color: #111827;">+91 90255 59837</strong> &nbsp;·&nbsp; Email: <strong style="color: #111827;">littlesunbeamkidswear@gmail.com</strong>
               </p>
               <p style="margin: 0; font-size: 11px; color: #9CA3AF;">
                 &copy; ${new Date().getFullYear()} Little Sunbeam Babywear, Tiruppur, Tamil Nadu. All rights reserved.
