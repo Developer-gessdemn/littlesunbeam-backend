@@ -56,7 +56,6 @@ const getCart = async (req, res, next) => {
     cart.items.forEach((item) => {
       const currentItemPrice = parsePrice(item.price);
       if (currentItemPrice <= 0 && item.product) {
-        // Try finding variant price first
         let variantPrice = 0;
         if (Array.isArray(item.product.colorVariants)) {
           const cv = item.product.colorVariants.find(
@@ -66,7 +65,9 @@ const getCart = async (req, res, next) => {
             const inv = cv.inventory.find(
               (i) => (i.size || "").toLowerCase() === (item.selectedSize || "").toLowerCase()
             );
-            if (inv) variantPrice = parsePrice(inv.price, inv.mrp);
+            if (inv && inv.price !== undefined && Number(inv.price) > 0) {
+              variantPrice = Number(inv.price);
+            }
           }
         }
         if (!variantPrice && Array.isArray(item.product.variants)) {
@@ -75,10 +76,17 @@ const getCart = async (req, res, next) => {
               (varItem.color || "").toLowerCase() === (item.selectedColor || "").toLowerCase() &&
               (varItem.size || "").toLowerCase() === (item.selectedSize || "").toLowerCase()
           );
-          if (v) variantPrice = parsePrice(v.price, v.mrp);
+          if (v && v.price !== undefined && Number(v.price) > 0) {
+            variantPrice = Number(v.price);
+          }
         }
 
-        const resolved = variantPrice || parsePrice(item.product.price, item.product.sellingPrice, item.product.mrp);
+        const resolved =
+          variantPrice ||
+          (item.product.sellingPrice && Number(item.product.sellingPrice) > 0 ? Number(item.product.sellingPrice) : 0) ||
+          (item.product.price && Number(item.product.price) > 0 ? Number(item.product.price) : 0) ||
+          (item.product.mrp && Number(item.product.mrp) > 0 ? Number(item.product.mrp) : 0);
+
         if (resolved > 0) {
           item.price = resolved;
           hasRepairedPrices = true;
@@ -91,12 +99,16 @@ const getCart = async (req, res, next) => {
     }
 
     const items = cart.items.map((item) => {
-      const p = parsePrice(
-        item.price,
-        item.product?.price,
-        item.product?.sellingPrice,
-        item.product?.mrp
-      );
+      let p = 0;
+      if (item.price !== undefined && !isNaN(Number(item.price)) && Number(item.price) > 0) {
+        p = Number(item.price);
+      } else if (item.product?.sellingPrice !== undefined && Number(item.product.sellingPrice) > 0) {
+        p = Number(item.product.sellingPrice);
+      } else if (item.product?.price !== undefined && Number(item.product.price) > 0) {
+        p = Number(item.product.price);
+      } else if (item.product?.mrp !== undefined && Number(item.product.mrp) > 0) {
+        p = Number(item.product.mrp);
+      }
       const itemObj = item.toObject ? item.toObject() : item;
       return {
         ...itemObj,
@@ -178,7 +190,9 @@ const addToCart = async (req, res, next) => {
           );
           if (matchedInv) {
             availableStock = Number(matchedInv.stock);
-            variantPrice = parsePrice(matchedInv.price, matchedInv.mrp);
+            if (matchedInv.price !== undefined && !isNaN(Number(matchedInv.price)) && Number(matchedInv.price) > 0) {
+              variantPrice = Number(matchedInv.price);
+            }
           }
         }
       }
@@ -191,19 +205,26 @@ const addToCart = async (req, res, next) => {
           (v.size || "").toLowerCase() === size.toLowerCase()
       );
       if (flatV) {
-        variantPrice = parsePrice(flatV.price, flatV.mrp);
+        if (flatV.price !== undefined && !isNaN(Number(flatV.price)) && Number(flatV.price) > 0) {
+          variantPrice = Number(flatV.price);
+        }
         if (flatV.stock !== undefined) availableStock = Number(flatV.stock);
       }
     }
 
-    // Resolve final unit price: candidate price, then variant price, then product base price/sellingPrice/mrp
-    const itemPrice = parsePrice(
-      price,
-      variantPrice,
-      product.price,
-      product.sellingPrice,
-      product.mrp
-    );
+    // Resolve final unit selling price: variantPrice > product.sellingPrice > product.price > candidate price > mrp
+    let itemPrice = 0;
+    if (variantPrice > 0) {
+      itemPrice = variantPrice;
+    } else if (product.sellingPrice !== undefined && !isNaN(Number(product.sellingPrice)) && Number(product.sellingPrice) > 0) {
+      itemPrice = Number(product.sellingPrice);
+    } else if (product.price !== undefined && !isNaN(Number(product.price)) && Number(product.price) > 0) {
+      itemPrice = Number(product.price);
+    } else if (price !== undefined && !isNaN(Number(price)) && Number(price) > 0) {
+      itemPrice = Number(price);
+    } else if (product.mrp !== undefined && !isNaN(Number(product.mrp)) && Number(product.mrp) > 0) {
+      itemPrice = Number(product.mrp);
+    }
 
     // Stock validation
     if (availableStock < qtyToAdd) {

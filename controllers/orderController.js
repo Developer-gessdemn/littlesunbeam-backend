@@ -1,3 +1,4 @@
+
 const crypto = require("crypto");
 const Order = require("../models/Order");
 const Product = require("../models/Product");
@@ -171,17 +172,41 @@ const createOrder = async (req, res, next) => {
         });
       }
 
-      // Resolve item price: prefer variant price if > 0, else fall back to product root price, else use price sent by frontend
-      const variantPrice = variantMatched?.price && Number(variantMatched.price) > 0 ? Number(variantMatched.price) : 0;
-      const variantMrp = variantMatched?.mrp && Number(variantMatched.mrp) > 0 ? Number(variantMatched.mrp) : 0;
-      const itemPrice = parsePrice(
-        variantPrice || undefined,
-        variantMrp || undefined,
-        product?.price,
-        product?.sellingPrice,
-        product?.mrp,
-        item.price
-      );
+      // Resolve item selling price with authoritative priority:
+      // 1. Matched variant price (if > 0)
+      // 2. Product sellingPrice (if > 0)
+      // 3. Product price (if > 0)
+      // 4. Client item.price (if > 0)
+      // 5. Matched variant mrp (only if no selling price exists)
+      // 6. Product mrp (only if no selling price exists)
+      let itemPrice = 0;
+      const vPrice = variantMatched?.price !== undefined && !isNaN(Number(variantMatched.price)) && Number(variantMatched.price) > 0 ? Number(variantMatched.price) : 0;
+      const pSellingPrice = product?.sellingPrice !== undefined && !isNaN(Number(product.sellingPrice)) && Number(product.sellingPrice) > 0 ? Number(product.sellingPrice) : 0;
+      const pPrice = product?.price !== undefined && !isNaN(Number(product.price)) && Number(product.price) > 0 ? Number(product.price) : 0;
+      const cPrice = item.price !== undefined && !isNaN(Number(item.price)) && Number(item.price) > 0 ? Number(item.price) : 0;
+      const vMrp = variantMatched?.mrp !== undefined && !isNaN(Number(variantMatched.mrp)) && Number(variantMatched.mrp) > 0 ? Number(variantMatched.mrp) : 0;
+      const pMrp = product?.mrp !== undefined && !isNaN(Number(product.mrp)) && Number(product.mrp) > 0 ? Number(product.mrp) : 0;
+
+      if (vPrice > 0) {
+        itemPrice = vPrice;
+      } else if (pSellingPrice > 0) {
+        itemPrice = pSellingPrice;
+      } else if (pPrice > 0) {
+        itemPrice = pPrice;
+      } else if (cPrice > 0) {
+        itemPrice = cPrice;
+      } else if (vMrp > 0) {
+        itemPrice = vMrp;
+      } else if (pMrp > 0) {
+        itemPrice = pMrp;
+      }
+
+      if (!itemPrice || itemPrice <= 0 || isNaN(itemPrice)) {
+        return res.status(400).json({
+          success: false,
+          message: `Invalid price for product '${product?.name || item.name || "Item"}'`,
+        });
+      }
 
       validatedItems.push({
         product: product?._id || undefined,
@@ -199,29 +224,47 @@ const createOrder = async (req, res, next) => {
 
     // Calculate discount
     let discount = 0;
-    const cleanCoupon = String(couponCode).trim().toUpperCase();
+    const cleanCoupon = String(couponCode || "").trim().toUpperCase();
     if (cleanCoupon === "SUNNY10") {
       discount = Math.round(subtotal * 0.1);
     }
 
-    // Calculate shipping
-    const shippingCharge = subtotal >= FREE_SHIPPING_THRESHOLD ? 0 : 99;
-    const totalAmount = Math.max(0, subtotal - discount + shippingCharge);
+    // Shipping charge: Store policy is Free Shipping (₹0).
+    // If client explicitly passes a shippingCharge, validate and apply it.
+    let shippingCharge = 0;
+    const { shippingCharge: clientShippingCharge, tax: clientTax } = req.body;
+    if (clientShippingCharge !== undefined && !isNaN(Number(clientShippingCharge))) {
+      shippingCharge = Math.max(0, Number(clientShippingCharge));
+    }
+
+    // Tax / GST: Included in product price by default
+    let tax = 0;
+    if (clientTax !== undefined && !isNaN(Number(clientTax))) {
+      tax = Math.max(0, Number(clientTax));
+    }
+
+    // Authoritative total order amount in INR
+    const totalAmount = Math.max(0, subtotal - discount + shippingCharge + tax);
 
     // Determine payment details and verify Razorpay signature if online payment
-    const { razorpay_payment_id, razorpay_order_id, razorpay_signature } = req.body;
+    const { razorpay_payment_id, razorpay_order_id, razorpay_signature, cardLast4 } = req.body;
+    const isOnlinePayment = paymentMethod !== "Cash on Delivery";
+    const calculatedPaise = Math.round(totalAmount * 100);
+
     let paymentStatus = "Pending";
     let paymentDetails = {
       gateway: "COD",
       transactionId: `COD-${Date.now()}`,
       cardLast4: "",
+      amountInPaise: 0,
     };
 
-    if (paymentMethod === "Cash on Delivery") {
+    if (!isOnlinePayment) {
       paymentStatus = "Pending";
       paymentDetails = {
         gateway: "COD",
         transactionId: `COD-${Date.now()}`,
+        amountInPaise: 0,
       };
     } else {
       // If Razorpay payment info is provided, verify the cryptographic signature
@@ -243,15 +286,18 @@ const createOrder = async (req, res, next) => {
           gateway: "Razorpay",
           transactionId: razorpay_payment_id,
           paymentIntentId: razorpay_order_id,
-          cardLast4: req.body.cardLast4 || "",
+          cardLast4: cardLast4 || "",
+          amountInPaise: calculatedPaise,
         };
       } else {
-        // Fallback for direct online payments or mock testing
+        // Direct online payments or mock testing
         paymentStatus = "Paid";
         paymentDetails = {
           gateway: "Razorpay_Direct",
-          transactionId: `TXN-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-          cardLast4: req.body.cardLast4 || "4242",
+          transactionId: razorpay_payment_id || `TXN-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+          paymentIntentId: razorpay_order_id || "",
+          cardLast4: cardLast4 || "4242",
+          amountInPaise: calculatedPaise,
         };
       }
     }
@@ -273,11 +319,16 @@ const createOrder = async (req, res, next) => {
       paymentMethod,
       paymentStatus,
       paymentDetails,
+      razorpayOrderId: razorpay_order_id || "",
+      razorpayPaymentId: razorpay_payment_id || "",
+      razorpaySignature: razorpay_signature || "",
+      razorpayAmountInPaise: isOnlinePayment ? calculatedPaise : 0,
       orderStatus: "Confirmed",
       subtotal,
       discount,
       couponCode: cleanCoupon,
       shippingCharge,
+      tax,
       totalAmount,
       notes: notes ? notes.trim() : "",
     });
@@ -502,7 +553,9 @@ const createRazorpayOrder = async (req, res, next) => {
       message: "Razorpay order created successfully",
       data: {
         orderId: razorpayOrder.id,
-        amount: razorpayOrder.amount,
+        amount: razorpayOrder.amount, // amount in paise (e.g. 100 for ₹1)
+        amountInPaise: razorpayOrder.amount,
+        amountInINR: Number(amount),
         currency: razorpayOrder.currency,
         keyId: process.env.RAZORPAY_KEY_ID || "rzp_live_TaDwCOE6e7ioNi",
       },

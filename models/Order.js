@@ -131,6 +131,7 @@ const orderSchema = new mongoose.Schema(
       transactionId: { type: String, default: "" },
       paymentIntentId: { type: String, default: "" },
       cardLast4: { type: String, default: "" },
+      amountInPaise: { type: Number, default: 0 },
     },
     orderStatus: {
       type: String,
@@ -193,9 +194,31 @@ const orderSchema = new mongoose.Schema(
       default: 0,
       min: 0,
     },
+    tax: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
     totalAmount: {
       type: Number,
       required: true,
+      min: 0,
+    },
+    razorpayOrderId: {
+      type: String,
+      default: "",
+    },
+    razorpayPaymentId: {
+      type: String,
+      default: "",
+    },
+    razorpaySignature: {
+      type: String,
+      default: "",
+    },
+    razorpayAmountInPaise: {
+      type: Number,
+      default: 0,
       min: 0,
     },
     notes: {
