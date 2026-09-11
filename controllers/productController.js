@@ -469,8 +469,8 @@ const createProduct = async (req, res, next) => {
             color: colorName,
             size: sz,
             stock: st,
-            price: inv.price !== undefined && !isNaN(Number(inv.price)) ? Number(inv.price) : numericPrice,
-            mrp: inv.mrp !== undefined && !isNaN(Number(inv.mrp)) ? Number(inv.mrp) : numericMrp,
+            price: inv.price !== undefined && inv.price !== "" && !isNaN(Number(inv.price)) && Number(inv.price) > 0 ? Number(inv.price) : numericPrice,
+            mrp: inv.mrp !== undefined && inv.mrp !== "" && !isNaN(Number(inv.mrp)) && Number(inv.mrp) > 0 ? Number(inv.mrp) : numericMrp,
             image: primaryImgUrl || image || "",
           };
           formattedVariants.push(variantObj);
@@ -735,13 +735,16 @@ const updateProduct = async (req, res, next) => {
           totalStockFromVariants += st;
           collectedSizes.add(sz);
 
+          const variantPrice = (inv.price !== undefined && inv.price !== "" && !isNaN(Number(inv.price)) && Number(inv.price) > 0 && updates.price === undefined) ? Number(inv.price) : finalPrice;
+          const variantMrp = (inv.mrp !== undefined && inv.mrp !== "" && !isNaN(Number(inv.mrp)) && Number(inv.mrp) > 0 && updates.mrp === undefined) ? Number(inv.mrp) : finalMrp;
+
           const variantObj = {
             sku: variantSku,
             color: colorName,
             size: sz,
             stock: st,
-            price: inv.price !== undefined && !isNaN(Number(inv.price)) ? Number(inv.price) : finalPrice,
-            mrp: inv.mrp !== undefined && !isNaN(Number(inv.mrp)) ? Number(inv.mrp) : finalMrp,
+            price: variantPrice,
+            mrp: variantMrp,
             image: primaryImgUrl || updates.image || product.image || "",
           };
           formattedVariants.push(variantObj);
@@ -750,8 +753,8 @@ const updateProduct = async (req, res, next) => {
             size: sz,
             stock: st,
             sku: variantSku,
-            price: variantObj.price,
-            mrp: variantObj.mrp,
+            price: variantPrice,
+            mrp: variantMrp,
           };
         });
 
@@ -806,6 +809,10 @@ const updateProduct = async (req, res, next) => {
     if (updates.subCategoryId && !isValidObjectId(updates.subCategoryId)) {
       delete updates.subCategoryId;
     }
+    if (updates.subCategory === "") {
+      product.subCategory = "";
+      product.subCategoryId = undefined;
+    }
 
     if (updates.status) {
       if (updates.status === "Draft" || updates.status === "Archived") {
@@ -824,6 +831,12 @@ const updateProduct = async (req, res, next) => {
     }
 
     Object.assign(product, updates);
+    if (updates.colorVariants) product.markModified("colorVariants");
+    if (updates.variants) product.markModified("variants");
+    if (updates.colors) product.markModified("colors");
+    if (updates.sizes) product.markModified("sizes");
+    if (updates.gallery) product.markModified("gallery");
+    if (updates.videos) product.markModified("videos");
     await product.save();
     const updatedProduct = await Product.findById(product._id).populate("prints");
 

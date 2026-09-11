@@ -171,9 +171,12 @@ const createOrder = async (req, res, next) => {
         });
       }
 
+      // Resolve item price: prefer variant price if > 0, else fall back to product root price, else use price sent by frontend
+      const variantPrice = variantMatched?.price && Number(variantMatched.price) > 0 ? Number(variantMatched.price) : 0;
+      const variantMrp = variantMatched?.mrp && Number(variantMatched.mrp) > 0 ? Number(variantMatched.mrp) : 0;
       const itemPrice = parsePrice(
-        variantMatched?.price,
-        variantMatched?.mrp,
+        variantPrice || undefined,
+        variantMrp || undefined,
         product?.price,
         product?.sellingPrice,
         product?.mrp,

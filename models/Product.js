@@ -429,8 +429,8 @@ productSchema.pre("save", function (next) {
             colorId: cv._id,
             size: sz,
             stock: st,
-            price: inv.price !== undefined ? inv.price : this.price,
-            mrp: inv.mrp !== undefined ? inv.mrp : (this.mrp || this.price),
+            price: inv.price !== undefined && inv.price !== "" && !isNaN(Number(inv.price)) && Number(inv.price) > 0 ? Number(inv.price) : this.price,
+            mrp: inv.mrp !== undefined && inv.mrp !== "" && !isNaN(Number(inv.mrp)) && Number(inv.mrp) > 0 ? Number(inv.mrp) : (this.mrp || this.price),
             image: primaryImg || this.image || "",
           });
         });
