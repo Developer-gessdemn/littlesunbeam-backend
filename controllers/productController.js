@@ -134,19 +134,97 @@ const getProducts = async (req, res, next) => {
 
     // 3. Age Group Filter
     if (age) {
-      const ageArray = Array.isArray(age)
-        ? age
-        : age.split(",").map((a) => a.trim());
-      const expandedAges = [];
-      ageArray.forEach((a) => {
-        expandedAges.push(a);
-        if (a.toLowerCase() === "1 - 4 years") {
-          expandedAges.push("1 - 2 Years", "2 - 3 Years", "3 - 4 Years", "2 - 4 Years");
+      const rawAgeTokens = (Array.isArray(age) ? age : String(age).split(","))
+        .map((a) => a.trim().replace(/\+/g, " "))
+        .filter(Boolean);
+
+      const ageConditions = [];
+
+      rawAgeTokens.forEach((rawAge) => {
+        const aLow = rawAge.toLowerCase();
+        let sizeRegexes = [];
+        let ageGroupRegexes = [];
+
+        if (aLow.includes("0 - 3") || aLow.includes("0-3") || aLow === "newborn" || aLow === "nb") {
+          ageGroupRegexes.push(/\b0\s*[-–to]+\s*3\b/i, /\b(?:newborn|nb)\b/i);
+          sizeRegexes.push(/\b0\s*[-–to]+\s*3\b/i, /\b(?:newborn|nb)\b/i);
+          ageConditions.push({
+            $and: [
+              {
+                $or: [
+                  { category: /hospital kit|swaddle|newborn/i },
+                  { categoryPill: /hospital kit|swaddle|newborn/i },
+                  { name: /hospital kit|swaddle|starter kit|gift box/i },
+                ],
+              },
+              {
+                $or: [
+                  { sizes: { $in: [/free size/i, /one size/i, /standard/i] } },
+                  { ageGroup: /\b0\s*[-–to]+\s*3/i },
+                ],
+              },
+              {
+                sizes: {
+                  $not: {
+                    $elemMatch: {
+                      $regex: /\b(?:1|2|3|4|5)\s*(?:[-–to]+|y|yr|years?)\b/i,
+                    },
+                  },
+                },
+              },
+            ],
+          });
+        } else if (aLow.includes("3 - 6") || aLow.includes("3-6")) {
+          ageGroupRegexes.push(/\b3\s*[-–to]+\s*6\b/i);
+          sizeRegexes.push(/\b3\s*[-–to]+\s*6\b/i);
+        } else if (aLow.includes("6 - 12") || aLow.includes("6-12") || aLow.includes("6 - 9") || aLow.includes("9 - 12")) {
+          ageGroupRegexes.push(/\b6\s*[-–to]+\s*12\b/i, /\b6\s*[-–to]+\s*9\b/i, /\b9\s*[-–to]+\s*12\b/i);
+          sizeRegexes.push(/\b6\s*[-–to]+\s*12\b/i, /\b6\s*[-–to]+\s*9\b/i, /\b9\s*[-–to]+\s*12\b/i);
+          ageConditions.push({
+            name: /towel/i,
+            ageGroup: /\b6\s*[-–to]+\s*12\b/i,
+          });
+        } else if (aLow.includes("1 - 4") || aLow.includes("1-4")) {
+          const toddlerRegexes = [
+            /\b1\s*[-–to]+\s*4\b/i,
+            /\b1\s*[-–to]+\s*2\b/i,
+            /\b2\s*[-–to]+\s*3\b/i,
+            /\b3\s*[-–to]+\s*4\b/i,
+            /\b2\s*[-–to]+\s*4\b/i,
+            /\b4\s*[-–to]+\s*5\b/i,
+            /\b(?:1|2|3|4)\s*(?:y|yr|years?)\b/i,
+          ];
+          ageGroupRegexes.push(...toddlerRegexes);
+          sizeRegexes.push(...toddlerRegexes);
+        } else {
+          const escaped = rawAge.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          ageGroupRegexes.push(new RegExp(escaped, "i"));
+          sizeRegexes.push(new RegExp(escaped, "i"));
+        }
+
+        if (ageGroupRegexes.length > 0) {
+          ageConditions.push({ ageGroup: { $in: ageGroupRegexes } });
+        }
+        if (sizeRegexes.length > 0) {
+          ageConditions.push(
+            { sizes: { $in: sizeRegexes } },
+            { "colorVariants.sizes": { $in: sizeRegexes } },
+            { "colorVariants.inventory.size": { $in: sizeRegexes } },
+            { "variants.size": { $in: sizeRegexes } }
+          );
         }
       });
-      query.ageGroup = {
-        $in: expandedAges.map((a) => new RegExp(a, "i")),
-      };
+
+      if (ageConditions.length > 0) {
+        if (query.$and) {
+          query.$and.push({ $or: ageConditions });
+        } else if (query.$or) {
+          query.$and = [{ $or: query.$or }, { $or: ageConditions }];
+          delete query.$or;
+        } else {
+          query.$or = ageConditions;
+        }
+      }
     }
 
     // 4. Print Filter (support single 'print' or multi-select 'prints')

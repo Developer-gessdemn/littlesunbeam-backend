@@ -15,7 +15,7 @@ const parsePrice = (...candidates) => {
   for (const val of candidates) {
     if (val === null || val === undefined || val === "") continue;
     if (typeof val === "number" && !isNaN(val) && val > 0) return val;
-    if (typeof val === "string") {
+    if (typeof val === "st,ring") {
       const cleaned = Number(val.replace(/[^0-9.]/g, ""));
       if (!isNaN(cleaned) && cleaned > 0) return cleaned;
     }
