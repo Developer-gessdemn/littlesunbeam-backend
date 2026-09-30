@@ -203,7 +203,10 @@ const getProducts = async (req, res, next) => {
         }
 
         if (ageGroupRegexes.length > 0) {
-          ageConditions.push({ ageGroup: { $in: ageGroupRegexes } });
+          ageConditions.push(
+            { ageGroup: { $in: ageGroupRegexes } },
+            { ageGroups: { $in: ageGroupRegexes } }
+          );
         }
         if (sizeRegexes.length > 0) {
           ageConditions.push(
@@ -414,6 +417,7 @@ const createProduct = async (req, res, next) => {
       lowStockThreshold,
       sku,
       ageGroup,
+      ageGroups,
       gender,
       fabric,
       pattern,
@@ -666,7 +670,10 @@ const createProduct = async (req, res, next) => {
       lowStockThreshold: numericThreshold,
       stockStatus: initialStockStatus,
       sku: productSku,
-      ageGroup: ageGroup || "0 - 3 Months",
+      ageGroup: ageGroup || (Array.isArray(ageGroups) && ageGroups.length > 0 ? ageGroups.join(", ") : "0 - 3 Months"),
+      ageGroups: Array.isArray(ageGroups) && ageGroups.length > 0
+        ? ageGroups.map((a) => String(a).trim()).filter(Boolean)
+        : (ageGroup ? String(ageGroup).split(",").map((a) => a.trim()).filter(Boolean) : ["0 - 3 Months"]),
       gender: gender || "Unisex",
       fabric: fabric ? fabric.trim() : "",
       pattern: pattern ? pattern.trim() : "",
@@ -879,6 +886,17 @@ const updateProduct = async (req, res, next) => {
       if (updates.print === undefined && updates.prints.length > 0) {
         updates.print = String(updates.prints[0]);
       }
+    }
+
+    if (updates.ageGroups !== undefined) {
+      updates.ageGroups = Array.isArray(updates.ageGroups)
+        ? updates.ageGroups.map((a) => String(a).trim()).filter(Boolean)
+        : [];
+      if (!updates.ageGroup && updates.ageGroups.length > 0) {
+        updates.ageGroup = updates.ageGroups.join(", ");
+      }
+    } else if (updates.ageGroup !== undefined) {
+      updates.ageGroups = String(updates.ageGroup).split(",").map((a) => a.trim()).filter(Boolean);
     }
 
     if (updates.categoryId && !isValidObjectId(updates.categoryId)) {

@@ -141,6 +141,11 @@ const productSchema = new mongoose.Schema(
       default: "0 - 3 Months",
       index: true,
     },
+    ageGroups: {
+      type: [String],
+      default: [],
+      index: true,
+    },
     sizes: {
       type: [String],
       default: [],
