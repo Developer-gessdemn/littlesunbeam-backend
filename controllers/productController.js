@@ -53,11 +53,26 @@ const getProducts = async (req, res, next) => {
       sort,
       isFeatured,
       isNewArrival,
+      all,
+      includeInactive,
+      isAdmin,
+      status,
       page = 1,
       limit = 20,
     } = req.query;
 
-    const query = { isActive: true };
+    const query = {};
+    if (all === "true" || includeInactive === "true" || isAdmin === "true") {
+      // Admin request: do not restrict by isActive unless specific status filter is provided
+      if (status && status !== "All") {
+        query.status = status;
+      }
+    } else if (status && status !== "All") {
+      query.status = status;
+      query.isActive = true;
+    } else {
+      query.isActive = true;
+    }
 
     // 1. Text Search (Search against name, description, category, categoryPill, subCategory, brand, sku, tags)
     if (search && search.trim()) {
@@ -316,9 +331,15 @@ const getProducts = async (req, res, next) => {
     else if (sort === "featured") sortOption = { isFeatured: -1, createdAt: -1 };
 
     // 11. Pagination
+    const isFetchAll = all === "true" || parseInt(limit, 10) === 0;
     const pageNum = Math.max(1, parseInt(page, 10) || 1);
-    const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
-    const skip = (pageNum - 1) * limitNum;
+    const parsedLimit = parseInt(limit, 10);
+    const limitNum = isFetchAll
+      ? 5000
+      : parsedLimit > 0
+        ? Math.min(5000, parsedLimit)
+        : 20;
+    const skip = isFetchAll ? 0 : (pageNum - 1) * limitNum;
 
     const totalProducts = await Product.countDocuments(query);
     const products = await Product.find(query)
@@ -820,8 +841,8 @@ const updateProduct = async (req, res, next) => {
           totalStockFromVariants += st;
           collectedSizes.add(sz);
 
-          const variantPrice = (inv.price !== undefined && inv.price !== "" && !isNaN(Number(inv.price)) && Number(inv.price) > 0 && updates.price === undefined) ? Number(inv.price) : finalPrice;
-          const variantMrp = (inv.mrp !== undefined && inv.mrp !== "" && !isNaN(Number(inv.mrp)) && Number(inv.mrp) > 0 && updates.mrp === undefined) ? Number(inv.mrp) : finalMrp;
+          const variantPrice = (inv.price !== undefined && inv.price !== "" && !isNaN(Number(inv.price)) && Number(inv.price) > 0) ? Number(inv.price) : finalPrice;
+          const variantMrp = (inv.mrp !== undefined && inv.mrp !== "" && !isNaN(Number(inv.mrp)) && Number(inv.mrp) > 0) ? Number(inv.mrp) : finalMrp;
 
           const variantObj = {
             sku: variantSku,

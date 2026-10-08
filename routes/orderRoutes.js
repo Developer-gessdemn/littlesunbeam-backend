@@ -5,6 +5,7 @@ const {
   getOrderById,
   createRazorpayOrder,
   getRazorpayKey,
+  handleRazorpayWebhook,
   trackOrderPublic,
 } = require("../controllers/orderController");
 const { protect } = require("../middleware/authMiddleware");
@@ -13,6 +14,7 @@ const router = express.Router();
 
 // Public routes (no login required)
 router.get("/razorpay-key", getRazorpayKey);
+router.post("/razorpay-webhook", handleRazorpayWebhook);
 router.route("/track").get(trackOrderPublic).post(trackOrderPublic);
 
 router.use(protect); // Order history and checkout order placement require customer auth

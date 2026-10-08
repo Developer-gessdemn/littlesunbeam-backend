@@ -117,34 +117,48 @@ const getAdminDashboard = async (req, res, next) => {
 // @access  Private/Admin
 const getAllOrders = async (req, res, next) => {
   try {
-    const { status, paymentStatus, search, page = 1, limit = 20 } = req.query;
+    const { status, paymentStatus, search, page, limit, all } = req.query;
 
     const query = {};
 
-    if (status) query.orderStatus = status;
-    if (paymentStatus) query.paymentStatus = paymentStatus;
+    if (status && status !== "All") query.orderStatus = status;
+    if (paymentStatus && paymentStatus !== "All") query.paymentStatus = paymentStatus;
 
     if (search && search.trim()) {
-      const sRegex = new RegExp(search.trim(), "i");
+      const sRegex = new RegExp(search.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
       query.$or = [
         { orderNumber: sRegex },
+        { customerId: sRegex },
+        { "customer.name": sRegex },
+        { "customer.email": sRegex },
+        { "customer.phone": sRegex },
         { "shippingAddress.name": sRegex },
         { "shippingAddress.email": sRegex },
         { "shippingAddress.phone": sRegex },
+        { "shippingAddress.city": sRegex },
+        { trackingNumber: sRegex },
+        { courierName: sRegex },
       ];
     }
 
-    const pageNum = Math.max(1, parseInt(page, 10) || 1);
-    const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
-    const skip = (pageNum - 1) * limitNum;
-
     const totalOrders = await Order.countDocuments(query);
-    const orders = await Order.find(query)
-      .populate("user", "name email phone")
+
+    // If 'all' is requested or neither page nor limit specified, return all orders for single source of truth
+    const isAll = all === "true" || (!page && !limit);
+
+    let ordersQuery = Order.find(query)
+      .populate("user", "name email phone role")
       .populate("items.product", "name price image sku")
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limitNum);
+      .sort({ createdAt: -1 });
+
+    if (!isAll) {
+      const pageNum = Math.max(1, parseInt(page, 10) || 1);
+      const limitNum = Math.min(500, Math.max(1, parseInt(limit, 10) || 50));
+      const skip = (pageNum - 1) * limitNum;
+      ordersQuery = ordersQuery.skip(skip).limit(limitNum);
+    }
+
+    const orders = await ordersQuery;
 
     return res.status(200).json({
       success: true,
@@ -153,9 +167,9 @@ const getAllOrders = async (req, res, next) => {
         orders,
         pagination: {
           total: totalOrders,
-          page: pageNum,
-          limit: limitNum,
-          totalPages: Math.ceil(totalOrders / limitNum) || 1,
+          page: isAll ? 1 : Math.max(1, parseInt(page, 10) || 1),
+          limit: isAll ? totalOrders : Math.min(500, Math.max(1, parseInt(limit, 10) || 50)),
+          totalPages: isAll ? 1 : Math.ceil(totalOrders / (parseInt(limit, 10) || 50)) || 1,
         },
       },
     });
@@ -539,32 +553,39 @@ const getAllUsers = async (req, res, next) => {
     const [users, orders] = await Promise.all([
       User.find({}).sort({ createdAt: -1 }),
       Order.find({})
-        .select("user orderNumber shippingAddress totalAmount orderStatus paymentStatus paymentMethod createdAt items")
+        .select("user customerId customer orderNumber shippingAddress totalAmount orderStatus paymentStatus paymentMethod createdAt items")
         .sort({ createdAt: -1 }),
     ]);
 
-    // Group orders by user ID
-    const userOrdersMap = {};
-    for (const order of orders) {
-      if (order.user) {
-        const uId = String(order.user);
-        if (!userOrdersMap[uId]) {
-          userOrdersMap[uId] = [];
-        }
-        userOrdersMap[uId].push(order);
-      }
-    }
-
     const enhancedUsers = users.map((u) => {
       const safeUser = u.toSafeObject();
-      const uOrders = userOrdersMap[String(u._id)] || [];
+      const uIdStr = String(u._id);
+      const uEmail = (u.email || "").trim().toLowerCase();
+      const uPhoneDigits = (u.phone || "").replace(/\D/g, "");
+
+      // Match all orders belonging to this user
+      const uOrders = orders.filter((ord) => {
+        const ordUserId = String(ord.user?._id || ord.user || "");
+        const ordCustId = String(ord.customerId || "");
+        const ordEmail = (ord.shippingAddress?.email || ord.customer?.email || "").trim().toLowerCase();
+        const ordPhoneDigits = (ord.shippingAddress?.phone || ord.customer?.phone || "").replace(/\D/g, "");
+
+        if (ordUserId && ordUserId === uIdStr) return true;
+        if (ordCustId && ordCustId === uIdStr) return true;
+        if (uEmail && ordEmail && uEmail === ordEmail) return true;
+        if (uPhoneDigits && ordPhoneDigits && uPhoneDigits.length >= 10 && ordPhoneDigits.length >= 10) {
+          if (uPhoneDigits.slice(-10) === ordPhoneDigits.slice(-10)) return true;
+        }
+        return false;
+      });
+
       const totalSpent = uOrders
         .filter((o) => o.orderStatus !== "Cancelled")
-        .reduce((sum, o) => sum + (o.totalAmount || 0), 0);
+        .reduce((sum, o) => sum + Number(o.totalAmount || 0), 0);
 
       const latestOrder = uOrders[0] || null;
 
-      // Extract effective shipping address (from shippingAddress, address, or latest order)
+      // Extract primary shipping address (from shippingAddress, address, or latest order)
       let effectiveShippingAddress = {
         name: safeUser.shippingAddress?.name || safeUser.address?.name || safeUser.name || "",
         phone: safeUser.shippingAddress?.phone || safeUser.address?.phone || safeUser.phone || "",
@@ -592,6 +613,37 @@ const getAllUsers = async (req, res, next) => {
         };
       }
 
+      // Collect all historical addresses from orders to preserve address history
+      const savedAddresses = [];
+      if (effectiveShippingAddress.street || effectiveShippingAddress.city || effectiveShippingAddress.pincode) {
+        savedAddresses.push({ ...effectiveShippingAddress, isPrimary: true });
+      }
+
+      for (const ord of uOrders) {
+        const s = ord.shippingAddress;
+        if (s && (s.address || s.street || s.city)) {
+          const addrStreet = s.address || s.street || "";
+          const isDup = savedAddresses.some(
+            (a) => (a.street || a.address || "").toLowerCase() === addrStreet.toLowerCase() &&
+                   (a.pincode || "").toLowerCase() === (s.pincode || "").toLowerCase()
+          );
+          if (!isDup) {
+            savedAddresses.push({
+              name: s.name || safeUser.name || "",
+              phone: s.phone || safeUser.phone || "",
+              email: s.email || safeUser.email || "",
+              street: addrStreet,
+              address: addrStreet,
+              city: s.city || "",
+              state: s.state || "",
+              pincode: s.pincode || "",
+              country: s.country || "India",
+              isPrimary: false,
+            });
+          }
+        }
+      }
+
       const hasAddress = Boolean(
         effectiveShippingAddress.street ||
         effectiveShippingAddress.city ||
@@ -601,6 +653,7 @@ const getAllUsers = async (req, res, next) => {
       return {
         ...safeUser,
         shippingAddress: effectiveShippingAddress,
+        savedAddresses,
         hasAddress,
         ordersCount: uOrders.length,
         totalSpent,
@@ -613,6 +666,7 @@ const getAllUsers = async (req, res, next) => {
           paymentMethod: ord.paymentMethod,
           itemsCount: ord.items?.length || 0,
           createdAt: ord.createdAt,
+          shippingAddress: ord.shippingAddress,
         })),
         latestOrder: latestOrder
           ? {

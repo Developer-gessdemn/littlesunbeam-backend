@@ -289,6 +289,20 @@ const createOrder = async (req, res, next) => {
           cardLast4: cardLast4 || "",
           amountInPaise: calculatedPaise,
         };
+
+        // Guarantee capture if payment is in authorized state
+        if (razorpay_payment_id && !razorpay_payment_id.startsWith("pay_demo") && !razorpay_payment_id.startsWith("TXN-")) {
+          try {
+            const razorpay = getRazorpayInstance();
+            const rzpPayment = await razorpay.payments.fetch(razorpay_payment_id);
+            if (rzpPayment && rzpPayment.status === "authorized") {
+              await razorpay.payments.capture(razorpay_payment_id, calculatedPaise, "INR");
+              console.log(`[Razorpay Auto-Capture] Successfully captured authorized payment ${razorpay_payment_id} for ${calculatedPaise} paise`);
+            }
+          } catch (captureErr) {
+            console.warn("[Razorpay Post-Capture Note]:", captureErr.message);
+          }
+        }
       } else {
         // Direct online payments or mock testing
         paymentStatus = "Paid";
@@ -299,12 +313,33 @@ const createOrder = async (req, res, next) => {
           cardLast4: cardLast4 || "4242",
           amountInPaise: calculatedPaise,
         };
+
+        if (razorpay_payment_id && !razorpay_payment_id.startsWith("pay_demo") && !razorpay_payment_id.startsWith("TXN-")) {
+          try {
+            const razorpay = getRazorpayInstance();
+            const rzpPayment = await razorpay.payments.fetch(razorpay_payment_id);
+            if (rzpPayment && rzpPayment.status === "authorized") {
+              await razorpay.payments.capture(razorpay_payment_id, calculatedPaise, "INR");
+              console.log(`[Razorpay Auto-Capture] Successfully captured authorized payment ${razorpay_payment_id} for ${calculatedPaise} paise`);
+            }
+          } catch (captureErr) {
+            console.warn("[Razorpay Post-Capture Note]:", captureErr.message);
+          }
+        }
       }
     }
 
-    // Create the order
+    // Create the order with permanent customer linking & snapshot
+    const customerSnapshot = {
+      name: (shippingAddress.name || req.user.name || "Customer").trim(),
+      email: (shippingAddress.email || req.user.email || "").trim().toLowerCase(),
+      phone: (shippingAddress.phone || req.user.phone || "").trim(),
+    };
+
     const order = await Order.create({
       user: req.user._id,
+      customerId: String(req.user._id),
+      customer: customerSnapshot,
       items: validatedItems,
       shippingAddress: {
         name: shippingAddress.name.trim(),
@@ -460,9 +495,41 @@ const createOrder = async (req, res, next) => {
 // @access  Private
 const getMyOrders = async (req, res, next) => {
   try {
-    const orders = await Order.find({ user: req.user._id })
+    const userEmail = (req.user.email || "").trim().toLowerCase();
+    const userIdStr = String(req.user._id);
+
+    const queryConditions = [
+      { user: req.user._id },
+      { customerId: userIdStr },
+    ];
+
+    if (userEmail) {
+      queryConditions.push({
+        "shippingAddress.email": { $regex: new RegExp(`^${userEmail.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i") },
+      });
+      queryConditions.push({
+        "customer.email": { $regex: new RegExp(`^${userEmail.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i") },
+      });
+    }
+
+    const orders = await Order.find({ $or: queryConditions })
       .populate("items.product", "name price image sku")
       .sort({ createdAt: -1 });
+
+    // Asynchronously backfill customerId and user reference on matching historical orders
+    for (const ord of orders) {
+      if (!ord.user || !ord.customerId || !ord.customer?.email) {
+        Order.findByIdAndUpdate(ord._id, {
+          user: req.user._id,
+          customerId: userIdStr,
+          customer: {
+            name: ord.customer?.name || req.user.name || ord.shippingAddress?.name || "Customer",
+            email: ord.customer?.email || req.user.email || ord.shippingAddress?.email || "",
+            phone: ord.customer?.phone || req.user.phone || ord.shippingAddress?.phone || "",
+          },
+        }).catch(() => {});
+      }
+    }
 
     return res.status(200).json({
       success: true,
@@ -499,10 +566,17 @@ const getOrderById = async (req, res, next) => {
     }
 
     // Ensure user owns this order unless user is admin
-    if (
-      String(order.user._id || order.user) !== String(req.user._id) &&
-      req.user.role !== "admin"
-    ) {
+    const userEmail = (req.user.email || "").toLowerCase();
+    const isOwner =
+      String(order.user?._id || order.user || "") === String(req.user._id) ||
+      String(order.customerId || "") === String(req.user._id) ||
+      (userEmail && (
+        order.shippingAddress?.email?.toLowerCase() === userEmail ||
+        order.customer?.email?.toLowerCase() === userEmail
+      )) ||
+      req.user.role === "admin";
+
+    if (!isOwner) {
       return res.status(403).json({
         success: false,
         message: "You are not authorized to view this order",
@@ -540,9 +614,10 @@ const createRazorpayOrder = async (req, res, next) => {
       amount: Math.round(Number(amount) * 100), // amount in paise
       currency: currency.toUpperCase(),
       receipt: `rcpt_${Date.now().toString().slice(-8)}_${Math.floor(Math.random() * 1000)}`,
+      payment_capture: 1, // AUTO-CAPTURE payment immediately upon authorization
       notes: {
-        userId: String(req.user._id),
-        userEmail: req.user.email || "",
+        userId: String(req.user?._id || ""),
+        userEmail: req.user?.email || "",
       },
     };
 
@@ -550,7 +625,7 @@ const createRazorpayOrder = async (req, res, next) => {
 
     return res.status(200).json({
       success: true,
-      message: "Razorpay order created successfully",
+      message: "Razorpay order created successfully with auto-capture enabled",
       data: {
         orderId: razorpayOrder.id,
         amount: razorpayOrder.amount, // amount in paise (e.g. 100 for ₹1)
@@ -696,12 +771,78 @@ const trackOrderPublic = async (req, res, next) => {
   }
 };
 
+// @desc    Handle Razorpay Webhooks (payment.captured, order.paid, payment.authorized)
+// @route   POST /api/orders/razorpay-webhook
+// @access  Public (Razorpay Server-to-Server)
+const handleRazorpayWebhook = async (req, res, next) => {
+  try {
+    const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
+    const razorpaySignature = req.headers["x-razorpay-signature"];
+
+    // If secret configured, verify webhook signature
+    if (webhookSecret && razorpaySignature) {
+      const shasum = crypto.createHmac("sha256", webhookSecret);
+      shasum.update(JSON.stringify(req.body));
+      const digest = shasum.digest("hex");
+      if (digest !== razorpaySignature) {
+        return res.status(400).json({ success: false, message: "Invalid webhook signature" });
+      }
+    }
+
+    const event = req.body.event;
+    const payload = req.body.payload;
+
+    console.log(`[Razorpay Webhook Received]: event = ${event}`);
+
+    if (event === "payment.authorized") {
+      const paymentEntity = payload?.payment?.entity;
+      if (paymentEntity && paymentEntity.id && paymentEntity.status === "authorized") {
+        try {
+          const razorpay = getRazorpayInstance();
+          await razorpay.payments.capture(paymentEntity.id, paymentEntity.amount, paymentEntity.currency || "INR");
+          console.log(`[Razorpay Webhook] Auto-captured authorized payment ${paymentEntity.id} for ${paymentEntity.amount} paise`);
+        } catch (capErr) {
+          console.warn("[Razorpay Webhook Capture Note]:", capErr.message);
+        }
+      }
+    }
+
+    if (event === "payment.captured" || event === "order.paid") {
+      const paymentEntity = payload?.payment?.entity;
+      const orderEntity = payload?.order?.entity;
+      const rzpOrderId = paymentEntity?.order_id || orderEntity?.id;
+      const rzpPaymentId = paymentEntity?.id;
+
+      if (rzpOrderId || rzpPaymentId) {
+        const query = {};
+        if (rzpOrderId) query.razorpayOrderId = rzpOrderId;
+        if (rzpPaymentId && !rzpOrderId) query.razorpayPaymentId = rzpPaymentId;
+
+        const dbOrder = await Order.findOne(query);
+        if (dbOrder && dbOrder.paymentStatus !== "Paid") {
+          dbOrder.paymentStatus = "Paid";
+          if (rzpPaymentId) dbOrder.razorpayPaymentId = rzpPaymentId;
+          if (dbOrder.orderStatus === "Pending") dbOrder.orderStatus = "Confirmed";
+          await dbOrder.save();
+          console.log(`[Razorpay Webhook] Updated Order ${dbOrder.orderNumber} to Paid / Confirmed`);
+        }
+      }
+    }
+
+    return res.status(200).json({ status: "ok" });
+  } catch (error) {
+    console.error("[Razorpay Webhook Error]:", error);
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 module.exports = {
   createOrder,
   getMyOrders,
   getOrderById,
   createRazorpayOrder,
   getRazorpayKey,
+  handleRazorpayWebhook,
   trackOrderPublic,
 };
 

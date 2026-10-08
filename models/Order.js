@@ -99,8 +99,18 @@ const orderSchema = new mongoose.Schema(
     user: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
-      required: true,
+      required: false,
       index: true,
+    },
+    customerId: {
+      type: String,
+      index: true,
+      default: "",
+    },
+    customer: {
+      name: { type: String, default: "" },
+      email: { type: String, default: "" },
+      phone: { type: String, default: "" },
     },
     items: {
       type: [orderItemSchema],
