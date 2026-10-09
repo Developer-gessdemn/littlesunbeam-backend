@@ -744,6 +744,26 @@ const seedDatabase = async (req, res, next) => {
   }
 };
 
+// @desc    Sync and reconcile recent Razorpay payments with MongoDB orders
+// @route   POST /api/admin/orders/sync-razorpay or GET /api/admin/orders/sync-razorpay
+// @access  Private/Admin
+const syncRazorpayOrders = async (req, res, next) => {
+  try {
+    const { count = 50 } = req.query;
+    const { syncAllRazorpayPayments } = require("../utils/razorpayReconciliation");
+    const syncResults = await syncAllRazorpayPayments(parseInt(count, 10) || 50);
+
+    return res.status(200).json({
+      success: true,
+      message: `Razorpay synchronization complete: ${syncResults.newlyCreated} recovered, ${syncResults.updated} updated`,
+      data: syncResults,
+    });
+  } catch (error) {
+    console.error("[syncRazorpayOrders Error]:", error);
+    next(error);
+  }
+};
+
 module.exports = {
   getAdminDashboard,
   getAllOrders,
@@ -755,4 +775,5 @@ module.exports = {
   getAllUsers,
   updateUserStatus,
   seedDatabase,
+  syncRazorpayOrders,
 };

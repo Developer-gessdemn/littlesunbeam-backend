@@ -7,6 +7,7 @@ const User = require("../models/User");
 const { getRazorpayInstance } = require("../config/razorpay");
 const { isValidObjectId } = require("../utils/validators");
 const { sendOrderMilestoneEmail } = require("../utils/emailService");
+const { reconcileSinglePayment } = require("../utils/razorpayReconciliation");
 
 const FREE_SHIPPING_THRESHOLD = 2499;
 
@@ -600,7 +601,7 @@ const getOrderById = async (req, res, next) => {
 // @access  Private
 const createRazorpayOrder = async (req, res, next) => {
   try {
-    const { amount, currency = "INR" } = req.body;
+    const { amount, currency = "INR", shippingAddress, items, subtotal } = req.body;
 
     if (!amount || isNaN(amount) || Number(amount) <= 0) {
       return res.status(400).json({
@@ -608,6 +609,10 @@ const createRazorpayOrder = async (req, res, next) => {
         message: "Please provide a valid order amount",
       });
     }
+
+    const sAddressStr = shippingAddress
+      ? `${shippingAddress.address || shippingAddress.street || ""}, ${shippingAddress.city || ""} - ${shippingAddress.pincode || ""}`
+      : "";
 
     const razorpay = getRazorpayInstance();
     const options = {
@@ -617,7 +622,10 @@ const createRazorpayOrder = async (req, res, next) => {
       payment_capture: 1, // AUTO-CAPTURE payment immediately upon authorization
       notes: {
         userId: String(req.user?._id || ""),
-        userEmail: req.user?.email || "",
+        userEmail: req.user?.email || shippingAddress?.email || "",
+        userPhone: shippingAddress?.phone || req.user?.phone || "",
+        customerName: shippingAddress?.name || req.user?.name || "",
+        address: sAddressStr,
       },
     };
 
@@ -794,38 +802,27 @@ const handleRazorpayWebhook = async (req, res, next) => {
 
     console.log(`[Razorpay Webhook Received]: event = ${event}`);
 
-    if (event === "payment.authorized") {
-      const paymentEntity = payload?.payment?.entity;
-      if (paymentEntity && paymentEntity.id && paymentEntity.status === "authorized") {
-        try {
-          const razorpay = getRazorpayInstance();
-          await razorpay.payments.capture(paymentEntity.id, paymentEntity.amount, paymentEntity.currency || "INR");
-          console.log(`[Razorpay Webhook] Auto-captured authorized payment ${paymentEntity.id} for ${paymentEntity.amount} paise`);
-        } catch (capErr) {
-          console.warn("[Razorpay Webhook Capture Note]:", capErr.message);
-        }
+    const paymentEntity = payload?.payment?.entity;
+
+    if (event === "payment.authorized" && paymentEntity?.id && paymentEntity.status === "authorized") {
+      try {
+        const razorpay = getRazorpayInstance();
+        await razorpay.payments.capture(paymentEntity.id, paymentEntity.amount, paymentEntity.currency || "INR");
+        console.log(`[Razorpay Webhook] Auto-captured authorized payment ${paymentEntity.id} for ${paymentEntity.amount} paise`);
+      } catch (capErr) {
+        console.warn("[Razorpay Webhook Capture Note]:", capErr.message);
       }
     }
 
-    if (event === "payment.captured" || event === "order.paid") {
-      const paymentEntity = payload?.payment?.entity;
-      const orderEntity = payload?.order?.entity;
-      const rzpOrderId = paymentEntity?.order_id || orderEntity?.id;
-      const rzpPaymentId = paymentEntity?.id;
-
-      if (rzpOrderId || rzpPaymentId) {
-        const query = {};
-        if (rzpOrderId) query.razorpayOrderId = rzpOrderId;
-        if (rzpPaymentId && !rzpOrderId) query.razorpayPaymentId = rzpPaymentId;
-
-        const dbOrder = await Order.findOne(query);
-        if (dbOrder && dbOrder.paymentStatus !== "Paid") {
-          dbOrder.paymentStatus = "Paid";
-          if (rzpPaymentId) dbOrder.razorpayPaymentId = rzpPaymentId;
-          if (dbOrder.orderStatus === "Pending") dbOrder.orderStatus = "Confirmed";
-          await dbOrder.save();
-          console.log(`[Razorpay Webhook] Updated Order ${dbOrder.orderNumber} to Paid / Confirmed`);
+    // Auto-reconcile payment to ensure order exists and is marked Paid / Confirmed
+    if (paymentEntity) {
+      try {
+        const result = await reconcileSinglePayment(paymentEntity);
+        if (result) {
+          console.log(`[Razorpay Webhook] Successfully reconciled order ${result.order.orderNumber} (isNew: ${result.isNew})`);
         }
+      } catch (recErr) {
+        console.warn("[Razorpay Webhook Reconcile Error]:", recErr.message);
       }
     }
 

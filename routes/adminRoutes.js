@@ -10,6 +10,7 @@ const {
   getAllUsers,
   updateUserStatus,
   seedDatabase,
+  syncRazorpayOrders,
 } = require("../controllers/adminController");
 const { protect } = require("../middleware/authMiddleware");
 const { admin } = require("../middleware/adminMiddleware");
@@ -22,6 +23,8 @@ router.use(admin);
 
 router.get("/dashboard", getAdminDashboard);
 router.get("/orders", getAllOrders);
+router.post("/orders/sync-razorpay", syncRazorpayOrders);
+router.get("/orders/sync-razorpay", syncRazorpayOrders);
 router.get("/orders/:id", getAdminOrderById);
 router.put("/orders/:id/status", updateOrderStatus);
 router.put("/orders/:id/courier", updateOrderCourierDetails);
