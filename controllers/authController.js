@@ -158,38 +158,36 @@ const getMe = async (req, res, next) => {
 // @access  Public
 const forgotPassword = async (req, res, next) => {
   try {
-    const rawInput = (req.body.email || req.body.identifier || req.body.phone || "").trim();
+    const rawInput = (req.body.email || req.body.identifier || "").trim();
 
     if (!rawInput) {
       return res.status(400).json({
         success: false,
-        message: "Please enter your registered email address or mobile number",
+        message: "Please enter your registered email address",
       });
     }
 
     let user = null;
-    if (/^\d{10}$/.test(rawInput)) {
-      user = await User.findOne({ phone: rawInput }).select("+resetPasswordToken +resetPasswordExpire +resetPasswordLastSent");
-    } else if (isValidEmail(rawInput)) {
+    if (isValidEmail(rawInput)) {
       user = await User.findOne({ email: rawInput.toLowerCase() }).select("+resetPasswordToken +resetPasswordExpire +resetPasswordLastSent");
     } else {
       return res.status(400).json({
         success: false,
-        message: "Please enter a valid email address or 10-digit mobile number",
+        message: "Please enter a valid email address",
       });
     }
 
     if (!user) {
       return res.status(404).json({
         success: false,
-        message: "No account found with this email or mobile number. Please check and try again.",
+        message: "No account found with this email address. Please check and try again.",
       });
     }
 
     if (!user.email) {
       return res.status(400).json({
         success: false,
-        message: "No email address linked to this account to receive OTP. Please contact support.",
+        message: "No email address linked to this account. Please contact support.",
       });
     }
 
@@ -268,13 +266,13 @@ const forgotPassword = async (req, res, next) => {
 // @access  Public
 const verifyResetOtp = async (req, res, next) => {
   try {
-    const rawInput = (req.body.email || req.body.identifier || req.body.phone || "").trim();
+    const rawInput = (req.body.email || req.body.identifier || "").trim();
     const { otp } = req.body;
 
     if (!rawInput || !otp) {
       return res.status(400).json({
         success: false,
-        message: "Please provide email/phone and OTP",
+        message: "Please provide email and OTP",
       });
     }
 
@@ -287,16 +285,11 @@ const verifyResetOtp = async (req, res, next) => {
 
     const hashedOtp = crypto.createHash("sha256").update(otp.toString().trim()).digest("hex");
 
-    let query = {
+    const query = {
+      email: rawInput.toLowerCase(),
       resetPasswordToken: hashedOtp,
       resetPasswordExpire: { $gt: Date.now() },
     };
-
-    if (/^\d{10}$/.test(rawInput)) {
-      query.phone = rawInput;
-    } else {
-      query.email = rawInput.toLowerCase();
-    }
 
     const user = await User.findOne(query).select("+resetPasswordToken +resetPasswordExpire");
 
@@ -333,7 +326,7 @@ const verifyResetOtp = async (req, res, next) => {
 // @access  Public
 const resetPassword = async (req, res, next) => {
   try {
-    const rawInput = (req.body.email || req.body.identifier || req.body.phone || "").trim();
+    const rawInput = (req.body.email || req.body.identifier || "").trim();
     const { resetToken, password, confirmPassword } = req.body;
 
     if (!rawInput || !resetToken || !password) {
@@ -359,16 +352,11 @@ const resetPassword = async (req, res, next) => {
 
     const hashedResetToken = crypto.createHash("sha256").update(resetToken).digest("hex");
 
-    let query = {
+    const query = {
+      email: rawInput.toLowerCase(),
       resetPasswordToken: hashedResetToken,
       resetPasswordExpire: { $gt: Date.now() },
     };
-
-    if (/^\d{10}$/.test(rawInput)) {
-      query.phone = rawInput;
-    } else {
-      query.email = rawInput.toLowerCase();
-    }
 
     const user = await User.findOne(query).select("+resetPasswordToken +resetPasswordExpire +password");
 
