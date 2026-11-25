@@ -230,9 +230,18 @@ const forgotPassword = async (req, res, next) => {
       await user.save({ validateBeforeSave: false });
 
       console.error("[forgotPassword] Email send error:", emailResult.error);
+
+      // Give a user-friendly message for domain verification issues
+      const isDomainError = emailResult.error && (
+        emailResult.error.includes("not verified") ||
+        emailResult.error.includes("domain") ||
+        emailResult.error.includes("testing emails")
+      );
       return res.status(500).json({
         success: false,
-        message: "Failed to send OTP email. Please try again later.",
+        message: isDomainError
+          ? "Email delivery is temporarily unavailable. Please contact support at littlesunbeamkidswear@gmail.com or WhatsApp +91 90255 59837."
+          : "Failed to send OTP email. Please try again later.",
       });
     }
 
