@@ -6,9 +6,9 @@ const isValidEmail = (email) => {
   return re.test(email.trim());
 };
 
-const isValidPhone = (phone) => {
-  if (!phone) return true; // Phone can be optional or validated if provided
-  const re = /^[0-9+\-\s()]{7,15}$/;
+const isValidPhone = (phone, required = false) => {
+  if (!phone) return !required;
+  const re = /^\d{10}$/;
   return re.test(String(phone).trim());
 };
 

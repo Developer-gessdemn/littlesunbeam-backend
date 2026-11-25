@@ -1,10 +1,67 @@
 const nodemailer = require("nodemailer");
+const https = require("https");
 
 /**
  * Little Sunbeam Order Tracking & Milestone Email Service
  */
 
-// Cache the nodemailer transporter instance
+// Helper to send email directly via Resend HTTPS REST API (Port 443)
+const sendViaResendApi = ({ from, to, subject, html, text }) => {
+  return new Promise((resolve) => {
+    const apiKey = (process.env.RESEND_API_KEY || "").trim();
+    if (!apiKey) {
+      return resolve({ success: false, error: "No RESEND_API_KEY set" });
+    }
+
+    const postData = JSON.stringify({
+      from,
+      to: Array.isArray(to) ? to : [to],
+      subject,
+      html,
+      text: text || undefined,
+    });
+
+    const options = {
+      hostname: "api.resend.com",
+      path: "/emails",
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+        "Content-Length": Buffer.byteLength(postData),
+      },
+    };
+
+    const req = https.request(options, (res) => {
+      let data = "";
+      res.on("data", (chunk) => (data += chunk));
+      res.on("end", () => {
+        try {
+          const parsed = JSON.parse(data);
+          if (res.statusCode >= 200 && res.statusCode < 300) {
+            resolve({ success: true, messageId: parsed.id, data: parsed });
+          } else {
+            resolve({
+              success: false,
+              statusCode: res.statusCode,
+              error: parsed.message || "Resend error",
+              name: parsed.name,
+              data: parsed,
+            });
+          }
+        } catch (e) {
+          resolve({ success: false, statusCode: res.statusCode, error: data });
+        }
+      });
+    });
+
+    req.on("error", (err) => resolve({ success: false, error: err.message }));
+    req.write(postData);
+    req.end();
+  });
+};
+
+// Cache the nodemailer transporter instance for SMTP fallback
 let transporter = null;
 
 const getTransporter = () => {
@@ -43,6 +100,61 @@ const getTransporter = () => {
   }
 
   return transporter;
+};
+
+/**
+ * Universal email dispatcher:
+ * 1. Checks Resend REST API (HTTPS port 443)
+ * 2. Falls back to onboarding@resend.dev if custom domain is still pending verification
+ * 3. Falls back to SMTP if API unavailable
+ */
+const sendEmailUniversal = async ({ to, subject, html, text }) => {
+  const preferredFrom = process.env.EMAIL_FROM || process.env.SMTP_FROM || '"Little Sunbeam" <support@littlesunbeam.in>';
+
+  if (process.env.RESEND_API_KEY) {
+    // 1. Try primary domain from address
+    const apiRes = await sendViaResendApi({ from: preferredFrom, to, subject, html, text });
+    if (apiRes.success) {
+      return { success: true, messageId: apiRes.messageId };
+    }
+
+    console.warn(`[emailService] Resend API with primary domain returned:`, apiRes.error);
+
+    // 2. If domain is not verified yet, fallback to onboarding@resend.dev
+    if (apiRes.error && apiRes.error.includes("not verified")) {
+      console.log(`[emailService] Attempting fallback via onboarding@resend.dev...`);
+      const fallbackRes = await sendViaResendApi({
+        from: '"Little Sunbeam" <onboarding@resend.dev>',
+        to,
+        subject,
+        html,
+        text,
+      });
+
+      if (fallbackRes.success) {
+        console.log(`[emailService] Delivered via onboarding@resend.dev fallback!`);
+        return { success: true, messageId: fallbackRes.messageId };
+      }
+
+      console.warn(`[emailService] Resend onboarding fallback error:`, fallbackRes.error);
+    }
+  }
+
+  // 3. Fallback to nodemailer SMTP transporter
+  try {
+    const mailer = getTransporter();
+    const info = await mailer.sendMail({
+      from: preferredFrom,
+      to,
+      subject,
+      html,
+      text,
+    });
+    return { success: true, messageId: info.messageId };
+  } catch (smtpErr) {
+    console.error(`[emailService] SMTP fallback failed:`, smtpErr.message);
+    return { success: false, error: smtpErr.message };
+  }
 };
 
 // Helper: Format Indian Rupee currency
@@ -432,20 +544,127 @@ const sendOrderMilestoneEmail = async ({ order, type, customMessage = "" }) => {
     const subject = subjects[type] || `📦 Order Update #${orderNumber} - Little Sunbeam`;
     const htmlContent = generateOrderHtml(order, type, customMessage);
 
-    const mailer = getTransporter();
-    const fromAddress = process.env.SMTP_FROM || '"Little Sunbeam" <orders@littlesunbeam.in>';
-
-    const info = await mailer.sendMail({
-      from: fromAddress,
+    const result = await sendEmailUniversal({
       to: recipientEmail,
       subject,
       html: htmlContent,
     });
 
-    console.log(`[emailService] Milestone email "${type}" sent to ${recipientEmail} for order ${orderNumber}`);
-    return { success: true, messageId: info.messageId };
+    if (result.success) {
+      console.log(`[emailService] Milestone email "${type}" sent to ${recipientEmail} for order ${orderNumber} (msgId: ${result.messageId})`);
+      return { success: true, messageId: result.messageId };
+    } else {
+      console.error(`[emailService] Failed to send milestone email:`, result.error);
+      return { success: false, error: result.error };
+    }
   } catch (error) {
     console.error("[emailService] Failed to send milestone email:", error.message);
+    return { success: false, error: error.message };
+  }
+};
+
+/**
+ * Send password reset email with OTP
+ */
+const sendPasswordResetEmail = async ({ email, name, otp }) => {
+  try {
+    if (!email || !email.includes("@")) {
+      return { success: false, message: "Invalid email address" };
+    }
+
+    const frontendBase = (process.env.FRONTEND_URL || "https://littlesunbeam.in")
+      .split(",")[0]
+      .trim();
+
+    const htmlContent = `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Password Reset - Little Sunbeam</title>
+</head>
+<body style="margin: 0; padding: 0; background-color: #FAF5EE; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased; color: #1F2937;">
+  <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color: #FAF5EE; padding: 30px 15px;">
+    <tr>
+      <td align="center">
+        <table width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width: 600px; background-color: #FFFFFF; border-radius: 24px; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.05); overflow: hidden; border: 1px solid #F3EDE2;">
+          
+          <!-- Header Bar -->
+          <tr>
+            <td align="center" style="background: linear-gradient(135deg, #FFFBEB 0%, #FEF3C7 100%); padding: 28px 20px; border-bottom: 2px dashed #FDE68A;">
+              <div style="font-size: 32px; line-height: 1; margin-bottom: 6px;">☀️</div>
+              <span style="font-size: 22px; font-weight: 900; color: #78350F; letter-spacing: -0.5px; text-transform: uppercase;">
+                Little <span style="color: #D97706;">Sunbeam</span>
+              </span>
+              <p style="margin: 4px 0 0 0; font-size: 11px; font-weight: 700; color: #92400E; letter-spacing: 1px; text-transform: uppercase;">
+                100% Organic Cotton Babywear · Tiruppur
+              </p>
+            </td>
+          </tr>
+
+          <!-- Content -->
+          <tr>
+            <td style="padding: 30px 30px 20px 30px; text-align: center;">
+              <div style="display: inline-block; padding: 6px 16px; border-radius: 9999px; background-color: #FEF3C7; color: #D97706; font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px;">
+                🔒 PASSWORD RESET
+              </div>
+              <h1 style="margin: 0 0 10px 0; font-size: 24px; font-weight: 900; color: #111827; letter-spacing: -0.5px;">
+                Reset Your Password
+              </h1>
+              <p style="margin: 0 0 20px 0; font-size: 14px; line-height: 1.6; color: #4B5563;">
+                Hello <strong style="color: #111827;">${name || "Valued Customer"}</strong>, we received a request to reset your password. Use the OTP code below to proceed.
+              </p>
+
+              <!-- OTP Code Box -->
+              <div style="background: linear-gradient(135deg, #F0FDF4 0%, #DCFCE7 100%); border: 2px solid #BBF7D0; border-radius: 18px; padding: 24px; margin: 0 auto; max-width: 300px;">
+                <p style="margin: 0 0 8px 0; font-size: 12px; font-weight: 800; color: #166534; text-transform: uppercase; letter-spacing: 0.5px;">Your OTP Code</p>
+                <p style="margin: 0; font-family: monospace; font-size: 36px; font-weight: 900; color: #14532D; letter-spacing: 8px;">${otp}</p>
+              </div>
+
+              <p style="margin: 20px 0 0 0; font-size: 13px; color: #6B7280; line-height: 1.6;">
+                This OTP is valid for <strong style="color: #111827;">5 minutes</strong>. If you didn't request a password reset, you can safely ignore this email.
+              </p>
+            </td>
+          </tr>
+
+          <!-- Footer -->
+          <tr>
+            <td align="center" style="background-color: #FFFDF9; padding: 24px 30px; border-top: 1px solid #F3EDE2; text-align: center;">
+              <p style="margin: 0 0 6px 0; font-size: 12px; font-weight: 700; color: #4B5563;">
+                Need help? Contact our support team.
+              </p>
+              <p style="margin: 0 0 16px 0; font-size: 12px; color: #6B7280;">
+                WhatsApp: <strong style="color: #111827;">+91 90255 59837</strong> &nbsp;·&nbsp; Email: <strong style="color: #111827;">support@littlesunbeam.in</strong>
+              </p>
+              <p style="margin: 0; font-size: 11px; color: #9CA3AF;">
+                &copy; ${new Date().getFullYear()} Little Sunbeam Babywear, Tiruppur, Tamil Nadu. All rights reserved.
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+    `;
+
+    const result = await sendEmailUniversal({
+      to: email,
+      subject: `🔒 Password Reset OTP - Little Sunbeam`,
+      html: htmlContent,
+    });
+
+    if (result.success) {
+      console.log(`[emailService] Password reset OTP sent to ${email} (msgId: ${result.messageId})`);
+      return { success: true, messageId: result.messageId };
+    } else {
+      console.error("[emailService] Failed to send password reset email:", result.error);
+      return { success: false, error: result.error };
+    }
+  } catch (error) {
+    console.error("[emailService] Failed to send password reset email:", error.message);
     return { success: false, error: error.message };
   }
 };
@@ -453,4 +672,5 @@ const sendOrderMilestoneEmail = async ({ order, type, customMessage = "" }) => {
 module.exports = {
   sendOrderMilestoneEmail,
   generateOrderHtml,
+  sendPasswordResetEmail,
 };

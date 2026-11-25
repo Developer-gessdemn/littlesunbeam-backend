@@ -4,7 +4,17 @@ const bcrypt = require("bcryptjs");
 const addressSchema = new mongoose.Schema(
   {
     name: { type: String, trim: true, default: "" },
-    phone: { type: String, trim: true, default: "" },
+    phone: {
+      type: String,
+      trim: true,
+      default: "",
+      validate: {
+        validator: function (v) {
+          return !v || /^\d{10}$/.test(v);
+        },
+        message: "Please enter a valid 10-digit mobile number.",
+      },
+    },
     email: { type: String, trim: true, default: "" },
     street: { type: String, trim: true, default: "" },
     address: { type: String, trim: true, default: "" },
@@ -43,6 +53,12 @@ const userSchema = new mongoose.Schema(
       type: String,
       trim: true,
       default: "",
+      validate: {
+        validator: function (v) {
+          return !v || /^\d{10}$/.test(v);
+        },
+        message: "Please enter a valid 10-digit mobile number.",
+      },
     },
     role: {
       type: String,
@@ -61,7 +77,17 @@ const userSchema = new mongoose.Schema(
       {
         id: { type: String },
         name: { type: String, trim: true, default: "" },
-        phone: { type: String, trim: true, default: "" },
+        phone: {
+      type: String,
+      trim: true,
+      default: "",
+      validate: {
+        validator: function (v) {
+          return !v || /^\d{10}$/.test(v);
+        },
+        message: "Please enter a valid 10-digit mobile number.",
+      },
+    },
         email: { type: String, trim: true, default: "" },
         street: { type: String, trim: true, default: "" },
         address: { type: String, trim: true, default: "" },
@@ -82,6 +108,18 @@ const userSchema = new mongoose.Schema(
     isActive: {
       type: Boolean,
       default: true,
+    },
+    resetPasswordToken: {
+      type: String,
+      select: false,
+    },
+    resetPasswordExpire: {
+      type: Date,
+      select: false,
+    },
+    resetPasswordLastSent: {
+      type: Date,
+      select: false,
     },
   },
   {

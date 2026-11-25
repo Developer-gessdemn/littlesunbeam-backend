@@ -325,13 +325,16 @@ const updateCartItemQty = async (req, res, next) => {
       });
     }
 
-    const item =
-      cart.items.id(itemId) ||
-      cart.items.find(
-        (i) =>
-          String(i._id) === itemId ||
-          `${String(i.product)}_${String(i.selectedColor || "Default")}_${String(i.selectedSize || "Standard")}` === itemId
-      );
+    // Try composite key / string match FIRST (before cart.items.id which throws on non-ObjectId strings)
+    let item = cart.items.find(
+      (i) =>
+        String(i._id) === itemId ||
+        `${String(i.product)}_${String(i.selectedColor || "Default")}_${String(i.selectedSize || "Standard")}` === itemId
+    );
+    // Fall back to Mongoose subdocument id lookup (only if itemId looks like an ObjectId)
+    if (!item && /^[a-f\d]{24}$/i.test(itemId)) {
+      try { item = cart.items.id(itemId); } catch { item = null; }
+    }
 
     if (!item) {
       return res.status(404).json({
@@ -479,10 +482,94 @@ const clearCart = async (req, res, next) => {
   }
 };
 
+// @desc    Merge guest cart items into authenticated user's cart
+// @route   POST /api/cart/merge
+// @access  Private
+const mergeCart = async (req, res, next) => {
+  try {
+    const { guestItems } = req.body;
+    if (!Array.isArray(guestItems) || guestItems.length === 0) {
+      return res.status(400).json({ success: false, message: "No guest items to merge" });
+    }
+
+    const cart = await getOrCreateCart(req.user._id);
+    // Filter out stale items
+    cart.items = cart.items.filter((item) => Boolean(item.product));
+
+    for (const guestItem of guestItems) {
+      const pid = guestItem.productId || guestItem._id || guestItem.id;
+      if (!pid) continue;
+
+      let product = null;
+      if (isValidObjectId(String(pid))) {
+        product = await Product.findById(pid);
+      }
+      if (!product || product.isActive === false) continue;
+
+      const size = (guestItem.selectedSize || guestItem.size || "Standard").trim();
+      const color = (guestItem.selectedColor || guestItem.color || "Default").trim();
+      const qty = Math.max(1, parseInt(guestItem.qty || guestItem.quantity, 10) || 1);
+      const price = parsePrice(guestItem.price, product.sellingPrice, product.price, product.mrp);
+      const image = guestItem.image || product.image || "";
+
+      const existingIdx = cart.items.findIndex(
+        (item) =>
+          String(item.product) === String(product._id) &&
+          String(item.selectedSize || "Standard").toLowerCase() === size.toLowerCase() &&
+          String(item.selectedColor || "Default").toLowerCase() === color.toLowerCase()
+      );
+
+      if (existingIdx > -1) {
+        // Increment qty for existing item
+        cart.items[existingIdx].quantity = Math.min(
+          cart.items[existingIdx].quantity + qty,
+          99
+        );
+      } else {
+        // Add new item
+        cart.items.push({
+          product: product._id,
+          name: product.name,
+          image,
+          price,
+          quantity: qty,
+          selectedSize: size,
+          selectedColor: color,
+          variant: guestItem.variant || (color !== "Default" && size !== "Standard" ? `${color} / ${size}` : color !== "Default" ? color : size !== "Standard" ? size : "Standard"),
+        });
+      }
+    }
+
+    await cart.save();
+    await cart.populate({
+      path: "items.product",
+      select: "name price sellingPrice mrp image stock isActive category sku colorVariants variants",
+    });
+
+    const items = cart.items.map((item) => {
+      const p = parsePrice(item.price, item.product?.price, item.product?.sellingPrice, item.product?.mrp);
+      const itemObj = item.toObject ? item.toObject() : item;
+      return { ...itemObj, price: p };
+    });
+
+    const subtotal = items.reduce((sum, item) => sum + item.price * item.quantity, 0);
+    const count = items.reduce((sum, item) => sum + item.quantity, 0);
+
+    return res.status(200).json({
+      success: true,
+      message: "Cart merged successfully",
+      data: { cart, items, subtotal, count },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   getCart,
   addToCart,
   updateCartItemQty,
   removeCartItem,
   clearCart,
+  mergeCart,
 };

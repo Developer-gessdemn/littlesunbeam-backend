@@ -16,7 +16,7 @@ const parsePrice = (...candidates) => {
   for (const val of candidates) {
     if (val === null || val === undefined || val === "") continue;
     if (typeof val === "number" && !isNaN(val) && val > 0) return val;
-    if (typeof val === "st,ring") {
+    if (typeof val === "string") {
       const cleaned = Number(val.replace(/[^0-9.]/g, ""));
       if (!isNaN(cleaned) && cleaned > 0) return cleaned;
     }
@@ -41,6 +41,14 @@ const createOrder = async (req, res, next) => {
       return res.status(400).json({
         success: false,
         message: "Please provide complete shipping address (name, address, city, pincode)",
+      });
+    }
+
+    const orderPhone = (shippingAddress.phone || req.user.phone || "").trim();
+    if (!orderPhone || !/^\d{10}$/.test(orderPhone)) {
+      return res.status(400).json({
+        success: false,
+        message: "Please enter a valid 10-digit mobile number.",
       });
     }
 

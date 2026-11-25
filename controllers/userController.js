@@ -60,7 +60,36 @@ const updateUserProfile = async (req, res, next) => {
       user.email = email.toLowerCase().trim();
     }
 
-    if (phone !== undefined) user.phone = phone ? phone.trim() : "";
+    if (phone !== undefined) {
+      const cleanPhone = phone ? String(phone).trim() : "";
+      if (cleanPhone && !/^\d{10}$/.test(cleanPhone)) {
+        return res.status(400).json({
+          success: false,
+          message: "Please enter a valid 10-digit mobile number.",
+        });
+      }
+      user.phone = cleanPhone;
+    }
+
+    if (shippingAddress && typeof shippingAddress === "object" && shippingAddress.phone) {
+      const cleanShippingPhone = String(shippingAddress.phone).trim();
+      if (!/^\d{10}$/.test(cleanShippingPhone)) {
+        return res.status(400).json({
+          success: false,
+          message: "Please enter a valid 10-digit mobile number.",
+        });
+      }
+    }
+
+    if (address && typeof address === "object" && address.phone) {
+      const cleanAddrPhone = String(address.phone).trim();
+      if (!/^\d{10}$/.test(cleanAddrPhone)) {
+        return res.status(400).json({
+          success: false,
+          message: "Please enter a valid 10-digit mobile number.",
+        });
+      }
+    }
 
     // Address updates
     const streetAddress = (
@@ -128,6 +157,17 @@ const updateUserProfile = async (req, res, next) => {
     };
 
     if (Array.isArray(addresses)) {
+      for (const addr of addresses) {
+        if (addr && addr.phone) {
+          const aPhone = String(addr.phone).trim();
+          if (!/^\d{10}$/.test(aPhone)) {
+            return res.status(400).json({
+              success: false,
+              message: "Please enter a valid 10-digit mobile number.",
+            });
+          }
+        }
+      }
       user.addresses = addresses;
     }
 
