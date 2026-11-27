@@ -1,4 +1,16 @@
-const axios = require("axios");
+// Simple in-memory cache for resolved Instagram URLs (1 hour TTL, max 500 entries)
+const instagramResolveCache = new Map();
+const INSTAGRAM_CACHE_TTL_MS = 60 * 60 * 1000;
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = 5000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 // @desc    Upload single file (Image / Video)
 // @route   POST /api/upload/single or POST /api/upload/video
@@ -79,6 +91,21 @@ const resolveInstagramMedia = async (req, res) => {
       });
     }
 
+    // Check in-memory cache first
+    const cached = instagramResolveCache.get(cleanUrl);
+    if (cached && Date.now() - cached.ts < INSTAGRAM_CACHE_TTL_MS) {
+      return res.status(200).json(cached.payload);
+    }
+
+    const cacheAndReturn = (payload) => {
+      if (instagramResolveCache.size >= 500) {
+        const firstKey = instagramResolveCache.keys().next().value;
+        if (firstKey) instagramResolveCache.delete(firstKey);
+      }
+      instagramResolveCache.set(cleanUrl, { ts: Date.now(), payload });
+      return res.status(200).json(payload);
+    };
+
     // ── Strategy 1: Meta Graph API (if access token is configured) ────────────
     const accessToken = process.env.INSTAGRAM_ACCESS_TOKEN || process.env.META_ACCESS_TOKEN;
     const match = cleanUrl.match(/instagram\.com\/(?:reel|reels|p|tv)\/([A-Za-z0-9_-]+)/i) ||
@@ -87,22 +114,25 @@ const resolveInstagramMedia = async (req, res) => {
 
     if (accessToken && shortcode) {
       try {
-        const metaRes = await axios.get(
+        const metaRes = await fetchWithTimeout(
           `https://graph.instagram.com/v18.0/${shortcode}?fields=id,media_type,media_url,thumbnail_url&access_token=${accessToken}`,
-          { timeout: 8000 }
+          { method: "GET" },
+          4500
         );
-        const metaData = metaRes.data;
-        if (metaData.media_url && (metaData.media_type === "VIDEO" || metaData.media_url.includes(".mp4"))) {
-          return res.status(200).json({
-            success: true,
-            data: {
-              url: cleanUrl,
-              resolvedVideoUrl: metaData.media_url,
-              thumbnailUrl: metaData.thumbnail_url || null,
-              isDirectVideo: true,
-              source: "meta-graph-api",
-            },
-          });
+        if (metaRes.ok) {
+          const metaData = await metaRes.json();
+          if (metaData.media_url && (metaData.media_type === "VIDEO" || metaData.media_url.includes(".mp4"))) {
+            return cacheAndReturn({
+              success: true,
+              data: {
+                url: cleanUrl,
+                resolvedVideoUrl: metaData.media_url,
+                thumbnailUrl: metaData.thumbnail_url || null,
+                isDirectVideo: true,
+                source: "meta-graph-api",
+              },
+            });
+          }
         }
       } catch (err) {
         console.warn("[Instagram Resolver] Meta Graph API failed:", err.message);
@@ -123,12 +153,16 @@ const resolveInstagramMedia = async (req, res) => {
     };
 
     try {
-      const pageRes = await axios.get(normalizedUrl, {
-        headers: HEADERS,
-        timeout: 12000,
-        maxRedirects: 5,
-      });
-      const html = pageRes.data || "";
+      const pageRes = await fetchWithTimeout(
+        normalizedUrl,
+        {
+          method: "GET",
+          headers: HEADERS,
+          redirect: "follow",
+        },
+        4500
+      );
+      const html = pageRes.ok ? await pageRes.text() : "";
 
       // Extract og:video from meta tags
       const ogVideoMatch =
@@ -148,8 +182,7 @@ const resolveInstagramMedia = async (req, res) => {
 
       if (videoUrl && (videoUrl.includes(".mp4") || videoUrl.includes("video"))) {
         const decodedUrl = videoUrl.replace(/&amp;/g, "&");
-        console.log("[Instagram Resolver] og:video found:", decodedUrl.substring(0, 80) + "...");
-        return res.status(200).json({
+        return cacheAndReturn({
           success: true,
           data: {
             url: cleanUrl,
@@ -163,7 +196,7 @@ const resolveInstagramMedia = async (req, res) => {
 
       // Extract thumbnail at minimum for fallback display
       if (thumbnailUrl) {
-        return res.status(200).json({
+        return cacheAndReturn({
           success: false,
           isFallbackNeeded: true,
           data: {
@@ -180,7 +213,7 @@ const resolveInstagramMedia = async (req, res) => {
     }
 
     // ── Final Fallback ────────────────────────────────────────────────────────
-    return res.status(200).json({
+    return cacheAndReturn({
       success: false,
       isFallbackNeeded: true,
       message: "Could not resolve Instagram video. Please upload the MP4 file directly.",

@@ -64,47 +64,49 @@ const toggleWishlist = async (req, res, next) => {
       });
     }
 
-    const user = await User.findById(req.user._id);
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: "User not found",
-      });
-    }
-
-    const targetIdStr = String(product._id);
-    const existingIndex = user.wishlist.findIndex(
-      (id) => String(id) === targetIdStr
-    );
+    // Atomic toggle: try removing first if present; otherwise add with $addToSet
+    let updatedUser = await User.findOneAndUpdate(
+      { _id: req.user._id, wishlist: product._id },
+      { $pull: { wishlist: product._id } },
+      { new: true }
+    ).populate({
+      path: "wishlist",
+      match: { isActive: true },
+    });
 
     let isWishlisted = false;
-    let message = "";
+    let message = "Product removed from wishlist";
 
-    if (existingIndex > -1) {
-      // Remove from wishlist
-      user.wishlist.splice(existingIndex, 1);
-      isWishlisted = false;
-      message = "Product removed from wishlist";
-    } else {
-      // Add to wishlist
-      user.wishlist.push(product._id);
+    if (!updatedUser) {
+      updatedUser = await User.findByIdAndUpdate(
+        req.user._id,
+        { $addToSet: { wishlist: product._id } },
+        { new: true }
+      ).populate({
+        path: "wishlist",
+        match: { isActive: true },
+      });
+
+      if (!updatedUser) {
+        return res.status(404).json({
+          success: false,
+          message: "User not found",
+        });
+      }
+
       isWishlisted = true;
       message = "Product added to wishlist";
     }
 
-    await user.save();
-    await user.populate({
-      path: "wishlist",
-      match: { isActive: true },
-    });
+    const targetIdStr = String(product._id);
 
     return res.status(200).json({
       success: true,
       message,
       data: {
         isWishlisted,
-        wishlist: user.wishlist || [],
-        count: user.wishlist ? user.wishlist.length : 0,
+        wishlist: updatedUser.wishlist || [],
+        count: updatedUser.wishlist ? updatedUser.wishlist.length : 0,
         productId: targetIdStr,
       },
     });
@@ -143,27 +145,21 @@ const addToWishlist = async (req, res, next) => {
       });
     }
 
-    const user = await User.findById(req.user._id);
+    const user = await User.findByIdAndUpdate(
+      req.user._id,
+      { $addToSet: { wishlist: product._id } },
+      { new: true }
+    ).populate({
+      path: "wishlist",
+      match: { isActive: true },
+    });
+
     if (!user) {
       return res.status(404).json({
         success: false,
         message: "User not found",
       });
     }
-
-    const exists = user.wishlist.some(
-      (id) => String(id) === String(product._id)
-    );
-
-    if (!exists) {
-      user.wishlist.push(product._id);
-      await user.save();
-    }
-
-    await user.populate({
-      path: "wishlist",
-      match: { isActive: true },
-    });
 
     return res.status(200).json({
       success: true,
@@ -195,23 +191,21 @@ const removeFromWishlist = async (req, res, next) => {
       if (prod) productObjectId = prod._id;
     }
 
-    const user = await User.findById(req.user._id);
+    const user = await User.findByIdAndUpdate(
+      req.user._id,
+      { $pull: { wishlist: productObjectId } },
+      { new: true }
+    ).populate({
+      path: "wishlist",
+      match: { isActive: true },
+    });
+
     if (!user) {
       return res.status(404).json({
         success: false,
         message: "User not found",
       });
     }
-
-    user.wishlist = user.wishlist.filter(
-      (id) => String(id) !== String(productObjectId)
-    );
-
-    await user.save();
-    await user.populate({
-      path: "wishlist",
-      match: { isActive: true },
-    });
 
     return res.status(200).json({
       success: true,

@@ -346,7 +346,8 @@ const getProducts = async (req, res, next) => {
       .populate("prints")
       .sort(sortOption)
       .skip(skip)
-      .limit(limitNum);
+      .limit(limitNum)
+      .lean();
 
     return res.status(200).json({
       success: true,

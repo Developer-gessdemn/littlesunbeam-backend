@@ -7,7 +7,7 @@ const { isValidObjectId } = require("../utils/validators");
 const getPrints = async (req, res, next) => {
   try {
     const filter = req.query.all === "true" ? {} : { isActive: { $ne: false } };
-    const prints = await Print.find(filter).sort({ order: 1, createdAt: 1 });
+    const prints = await Print.find(filter).sort({ order: 1, createdAt: 1 }).lean();
     return res.status(200).json({
       success: true,
       message: "Prints fetched successfully",

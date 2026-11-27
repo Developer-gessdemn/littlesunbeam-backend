@@ -55,6 +55,9 @@ const sendViaResendApi = ({ from, to, subject, html, text }) => {
       });
     });
 
+    req.setTimeout(10000, () => {
+      req.destroy(new Error("Resend API request timed out"));
+    });
     req.on("error", (err) => resolve({ success: false, error: err.message }));
     req.write(postData);
     req.end();
@@ -569,7 +572,7 @@ const sendOrderMilestoneEmail = async ({ order, type, customMessage = "" }) => {
 const sendPasswordResetEmail = async ({ email, name, otp }) => {
   try {
     if (!email || !email.includes("@")) {
-      return { success: false, message: "Invalid email address" };
+      return { success: false, error: "Invalid email address", message: "Invalid email address" };
     }
 
     const frontendBase = (process.env.FRONTEND_URL || "https://littlesunbeam.in")

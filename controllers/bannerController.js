@@ -54,7 +54,7 @@ const getBanners = async (req, res, next) => {
     const showAll = req.query.all === "true";
     const filter = showAll ? {} : { isActive: { $ne: false } };
 
-    let banners = await Banner.find(filter).sort({ order: 1, createdAt: 1 });
+    let banners = await Banner.find(filter).sort({ order: 1, createdAt: 1 }).lean();
 
     // If database has no banners at all, seed with defaults
     if (banners.length === 0) {

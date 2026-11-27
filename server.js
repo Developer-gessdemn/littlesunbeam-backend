@@ -142,6 +142,10 @@ function startServer(port = PORT) {
     );
   });
 
+  // Prevent 502 Bad Gateway from Nginx keep-alive race (Node default 5s < Nginx 60s)
+  server.keepAliveTimeout = 65000;
+  server.headersTimeout = 66000;
+
   server.on("error", (err) => {
     if (err.code === "EADDRINUSE") {
       console.warn(`[Server Warning] Port ${port} is currently in use.`);
@@ -163,9 +167,28 @@ if (require.main === module) {
   startServer(PORT);
 }
 
-// Handle unhandled promise rejections
+// Handle unhandled promise rejections and uncaught exceptions
 process.on("unhandledRejection", (err) => {
-  console.error(`[UnhandledRejection Error]: ${err.message}`);
+  console.error(`[UnhandledRejection Error]: ${err?.message || err}`);
 });
+
+process.on("uncaughtException", (err) => {
+  console.error(`[UncaughtException Error]: ${err?.message || err}`);
+});
+
+const gracefulShutdown = (signal) => {
+  console.log(`[Server] Received ${signal}, closing HTTP server...`);
+  if (server) {
+    server.close(() => {
+      process.exit(0);
+    });
+    setTimeout(() => process.exit(0), 5000).unref();
+  } else {
+    process.exit(0);
+  }
+};
+
+process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
+process.on("SIGINT", () => gracefulShutdown("SIGINT"));
 
 module.exports = app;

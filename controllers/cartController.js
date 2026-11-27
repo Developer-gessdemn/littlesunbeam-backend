@@ -15,13 +15,36 @@ const parsePrice = (...candidates) => {
   return 0;
 };
 
-// Helper: Get or create user cart
+// Helper: Get or create user cart atomically (avoids E11000 duplicate key on concurrent requests)
 const getOrCreateCart = async (userId) => {
-  let cart = await Cart.findOne({ user: userId });
-  if (!cart) {
-    cart = await Cart.create({ user: userId, items: [] });
+  return Cart.findOneAndUpdate(
+    { user: userId },
+    { $setOnInsert: { user: userId, items: [] } },
+    { upsert: true, new: true }
+  );
+};
+
+// Helper: Run a cart mutation with automatic retry on Mongoose VersionError
+const mutateCartWithRetry = async (userId, mutator, maxRetries = 3) => {
+  let lastErr;
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    const cart = await getOrCreateCart(userId);
+    const result = await mutator(cart);
+    if (result && result.abort) {
+      return result;
+    }
+    try {
+      await cart.save();
+      return { cart };
+    } catch (err) {
+      if (err.name === "VersionError" && attempt < maxRetries - 1) {
+        lastErr = err;
+        continue;
+      }
+      throw err;
+    }
   }
-  return cart;
+  throw lastErr;
 };
 
 // @desc    Get user's cart
@@ -95,7 +118,12 @@ const getCart = async (req, res, next) => {
     });
 
     if (cart.items.length !== initialLen || hasRepairedPrices) {
-      await cart.save();
+      try {
+        await cart.save();
+      } catch (saveErr) {
+        if (saveErr.name !== "VersionError") throw saveErr;
+        // Concurrent update already modified cart; safe to return current items without failing GET
+      }
     }
 
     const items = cart.items.map((item) => {
@@ -234,44 +262,52 @@ const addToCart = async (req, res, next) => {
       });
     }
 
-    const cart = await getOrCreateCart(req.user._id);
+    const mutation = await mutateCartWithRetry(req.user._id, async (cart) => {
+      // Filter out any stale/broken items first
+      cart.items = cart.items.filter((item) => Boolean(item.product));
 
-    // Filter out any stale/broken items first
-    cart.items = cart.items.filter((item) => Boolean(item.product));
+      // Check if exact item with same product ID + color + size exists in cart
+      const existingIndex = cart.items.findIndex(
+        (item) =>
+          String(item.product?._id || item.product) === String(product._id) &&
+          String(item.selectedSize || "Standard").toLowerCase() === size.toLowerCase() &&
+          String(item.selectedColor || "Default").toLowerCase() === color.toLowerCase()
+      );
 
-    // Check if exact item with same product ID + color + size exists in cart
-    const existingIndex = cart.items.findIndex(
-      (item) =>
-        String(item.product?._id || item.product) === String(product._id) &&
-        String(item.selectedSize || "Standard").toLowerCase() === size.toLowerCase() &&
-        String(item.selectedColor || "Default").toLowerCase() === color.toLowerCase()
-    );
-
-    if (existingIndex > -1) {
-      const newQty = cart.items[existingIndex].quantity + qtyToAdd;
-      if (newQty > availableStock) {
-        return res.status(400).json({
-          success: false,
-          message: `Cannot add more than available stock (${availableStock})`,
+      if (existingIndex > -1) {
+        const newQty = cart.items[existingIndex].quantity + qtyToAdd;
+        if (newQty > availableStock) {
+          return {
+            abort: true,
+            status: 400,
+            message: `Cannot add more than available stock (${availableStock})`,
+          };
+        }
+        cart.items[existingIndex].quantity = newQty;
+        if (itemPrice > 0) cart.items[existingIndex].price = itemPrice;
+        if (itemImage) cart.items[existingIndex].image = itemImage;
+      } else {
+        cart.items.push({
+          product: product._id,
+          name: product.name,
+          image: itemImage,
+          price: itemPrice,
+          quantity: qtyToAdd,
+          selectedSize: size,
+          selectedColor: color,
+          variant: variantStr,
         });
       }
-      cart.items[existingIndex].quantity = newQty;
-      if (itemPrice > 0) cart.items[existingIndex].price = itemPrice;
-      if (itemImage) cart.items[existingIndex].image = itemImage;
-    } else {
-      cart.items.push({
-        product: product._id,
-        name: product.name,
-        image: itemImage,
-        price: itemPrice,
-        quantity: qtyToAdd,
-        selectedSize: size,
-        selectedColor: color,
-        variant: variantStr,
+    });
+
+    if (mutation.abort) {
+      return res.status(mutation.status).json({
+        success: false,
+        message: mutation.message,
       });
     }
 
-    await cart.save();
+    const cart = mutation.cart;
     await cart.populate({
       path: "items.product",
       select: "name price sellingPrice mrp image stock isActive category sku colorVariants variants",
@@ -317,47 +353,49 @@ const updateCartItemQty = async (req, res, next) => {
     const { itemId } = req.params;
     const { quantity, delta } = req.body;
 
-    const cart = await Cart.findOne({ user: req.user._id });
-    if (!cart) {
-      return res.status(404).json({
+    const mutation = await mutateCartWithRetry(req.user._id, async (cart) => {
+      if (!cart || cart.items.length === 0) {
+        return { abort: true, status: 404, message: "Cart not found" };
+      }
+
+      // Try composite key / string match FIRST (before cart.items.id which throws on non-ObjectId strings)
+      let item = cart.items.find(
+        (i) =>
+          String(i._id) === itemId ||
+          `${String(i.product)}_${String(i.selectedColor || "Default")}_${String(i.selectedSize || "Standard")}` === itemId
+      );
+      // Fall back to Mongoose subdocument id lookup (only if itemId looks like an ObjectId)
+      if (!item && /^[a-f\d]{24}$/i.test(itemId)) {
+        try { item = cart.items.id(itemId); } catch { item = null; }
+      }
+
+      if (!item) {
+        return { abort: true, status: 404, message: "Item not found in cart" };
+      }
+
+      let newQty = item.quantity;
+      if (delta !== undefined) {
+        newQty = item.quantity + Number(delta);
+      } else if (quantity !== undefined) {
+        newQty = Number(quantity);
+      }
+
+      if (newQty <= 0) {
+        // Remove item if quantity drops to 0 or below
+        cart.items.pull(item._id);
+      } else {
+        item.quantity = newQty;
+      }
+    });
+
+    if (mutation.abort) {
+      return res.status(mutation.status).json({
         success: false,
-        message: "Cart not found",
+        message: mutation.message,
       });
     }
 
-    // Try composite key / string match FIRST (before cart.items.id which throws on non-ObjectId strings)
-    let item = cart.items.find(
-      (i) =>
-        String(i._id) === itemId ||
-        `${String(i.product)}_${String(i.selectedColor || "Default")}_${String(i.selectedSize || "Standard")}` === itemId
-    );
-    // Fall back to Mongoose subdocument id lookup (only if itemId looks like an ObjectId)
-    if (!item && /^[a-f\d]{24}$/i.test(itemId)) {
-      try { item = cart.items.id(itemId); } catch { item = null; }
-    }
-
-    if (!item) {
-      return res.status(404).json({
-        success: false,
-        message: "Item not found in cart",
-      });
-    }
-
-    let newQty = item.quantity;
-    if (delta !== undefined) {
-      newQty = item.quantity + Number(delta);
-    } else if (quantity !== undefined) {
-      newQty = Number(quantity);
-    }
-
-    if (newQty <= 0) {
-      // Remove item if quantity drops to 0 or below
-      cart.items.pull(item._id);
-    } else {
-      item.quantity = newQty;
-    }
-
-    await cart.save();
+    const cart = mutation.cart;
     await cart.populate({
       path: "items.product",
       select: "name price sellingPrice mrp image stock isActive category sku colorVariants variants",
@@ -402,23 +440,28 @@ const removeCartItem = async (req, res, next) => {
   try {
     const { itemId } = req.params;
 
-    const cart = await Cart.findOne({ user: req.user._id });
-    if (!cart) {
-      return res.status(404).json({
+    const mutation = await mutateCartWithRetry(req.user._id, async (cart) => {
+      if (!cart) {
+        return { abort: true, status: 404, message: "Cart not found" };
+      }
+
+      // Only remove the exact matching item
+      cart.items = cart.items.filter(
+        (item) =>
+          String(item._id) !== itemId &&
+          `${String(item.product)}_${String(item.selectedColor || "Default")}_${String(item.selectedSize || "Standard")}` !== itemId &&
+          `${String(item.product?._id || item.product)}_${String(item.variant || "")}` !== itemId
+      );
+    });
+
+    if (mutation.abort) {
+      return res.status(mutation.status).json({
         success: false,
-        message: "Cart not found",
+        message: mutation.message,
       });
     }
 
-    // Only remove the exact matching item
-    cart.items = cart.items.filter(
-      (item) =>
-        String(item._id) !== itemId &&
-        `${String(item.product)}_${String(item.selectedColor || "Default")}_${String(item.selectedSize || "Standard")}` !== itemId &&
-        `${String(item.product?._id || item.product)}_${String(item.variant || "")}` !== itemId
-    );
-
-    await cart.save();
+    const cart = mutation.cart;
     await cart.populate({
       path: "items.product",
       select: "name price sellingPrice mrp image stock isActive category sku colorVariants variants",
@@ -461,11 +504,11 @@ const removeCartItem = async (req, res, next) => {
 // @access  Private
 const clearCart = async (req, res, next) => {
   try {
-    const cart = await Cart.findOne({ user: req.user._id });
-    if (cart) {
-      cart.items = [];
-      await cart.save();
-    }
+    const cart = await Cart.findOneAndUpdate(
+      { user: req.user._id },
+      { $set: { items: [] } },
+      { new: true }
+    );
 
     return res.status(200).json({
       success: true,
@@ -492,10 +535,8 @@ const mergeCart = async (req, res, next) => {
       return res.status(400).json({ success: false, message: "No guest items to merge" });
     }
 
-    const cart = await getOrCreateCart(req.user._id);
-    // Filter out stale items
-    cart.items = cart.items.filter((item) => Boolean(item.product));
-
+    // Resolve products once outside the retry loop
+    const resolvedItems = [];
     for (const guestItem of guestItems) {
       const pid = guestItem.productId || guestItem._id || guestItem.id;
       if (!pid) continue;
@@ -512,35 +553,40 @@ const mergeCart = async (req, res, next) => {
       const price = parsePrice(guestItem.price, product.sellingPrice, product.price, product.mrp);
       const image = guestItem.image || product.image || "";
 
-      const existingIdx = cart.items.findIndex(
-        (item) =>
-          String(item.product) === String(product._id) &&
-          String(item.selectedSize || "Standard").toLowerCase() === size.toLowerCase() &&
-          String(item.selectedColor || "Default").toLowerCase() === color.toLowerCase()
-      );
-
-      if (existingIdx > -1) {
-        // Increment qty for existing item
-        cart.items[existingIdx].quantity = Math.min(
-          cart.items[existingIdx].quantity + qty,
-          99
-        );
-      } else {
-        // Add new item
-        cart.items.push({
-          product: product._id,
-          name: product.name,
-          image,
-          price,
-          quantity: qty,
-          selectedSize: size,
-          selectedColor: color,
-          variant: guestItem.variant || (color !== "Default" && size !== "Standard" ? `${color} / ${size}` : color !== "Default" ? color : size !== "Standard" ? size : "Standard"),
-        });
-      }
+      resolvedItems.push({
+        product: product._id,
+        name: product.name,
+        image,
+        price,
+        quantity: qty,
+        selectedSize: size,
+        selectedColor: color,
+        variant: guestItem.variant || (color !== "Default" && size !== "Standard" ? `${color} / ${size}` : color !== "Default" ? color : size !== "Standard" ? size : "Standard"),
+      });
     }
 
-    await cart.save();
+    const { cart } = await mutateCartWithRetry(req.user._id, async (cartDoc) => {
+      cartDoc.items = cartDoc.items.filter((item) => Boolean(item.product));
+
+      for (const itemToMerge of resolvedItems) {
+        const existingIdx = cartDoc.items.findIndex(
+          (item) =>
+            String(item.product) === String(itemToMerge.product) &&
+            String(item.selectedSize || "Standard").toLowerCase() === itemToMerge.selectedSize.toLowerCase() &&
+            String(item.selectedColor || "Default").toLowerCase() === itemToMerge.selectedColor.toLowerCase()
+        );
+
+        if (existingIdx > -1) {
+          cartDoc.items[existingIdx].quantity = Math.min(
+            cartDoc.items[existingIdx].quantity + itemToMerge.quantity,
+            99
+          );
+        } else {
+          cartDoc.items.push(itemToMerge);
+        }
+      }
+    });
+
     await cart.populate({
       path: "items.product",
       select: "name price sellingPrice mrp image stock isActive category sku colorVariants variants",

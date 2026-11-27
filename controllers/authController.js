@@ -205,7 +205,7 @@ const forgotPassword = async (req, res, next) => {
     }
 
     // Generate a 6-digit OTP
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const otp = crypto.randomInt(100000, 1000000).toString();
 
     // Hash the OTP and store with expiry (5 minutes)
     const hashedOtp = crypto.createHash("sha256").update(otp).digest("hex");

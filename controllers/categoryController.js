@@ -44,7 +44,7 @@ const getCategories = async (req, res, next) => {
     const { includeInactive } = req.query;
     const query = includeInactive === "true" ? {} : { isActive: true };
 
-    const categories = await Category.find(query).sort({ order: 1, name: 1 });
+    const categories = await Category.find(query).sort({ order: 1, name: 1 }).lean();
 
     return res.status(200).json({
       success: true,

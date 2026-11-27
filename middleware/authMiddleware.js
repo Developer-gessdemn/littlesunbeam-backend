@@ -6,14 +6,15 @@ const protect = async (req, res, next) => {
 
   if (
     req.headers.authorization &&
-    req.headers.authorization.startsWith("Bearer")
+    req.headers.authorization.startsWith("Bearer ")
   ) {
-    token = req.headers.authorization.split(" ")[1];
+    token = req.headers.authorization.split(" ")[1]?.trim();
   }
 
-  if (!token) {
+  if (!token || token === "null" || token === "undefined") {
     return res.status(401).json({
       success: false,
+      code: "NO_TOKEN",
       message: "Not authorized, no authentication token provided",
     });
   }
@@ -29,6 +30,7 @@ const protect = async (req, res, next) => {
     if (!user) {
       return res.status(401).json({
         success: false,
+        code: "USER_NOT_FOUND",
         message: "User belonging to this token no longer exists",
       });
     }
@@ -36,6 +38,7 @@ const protect = async (req, res, next) => {
     if (!user.isActive) {
       return res.status(403).json({
         success: false,
+        code: "ACCOUNT_DEACTIVATED",
         message: "Your user account has been deactivated",
       });
     }
@@ -43,10 +46,19 @@ const protect = async (req, res, next) => {
     req.user = user;
     next();
   } catch (error) {
-    console.error("[AuthMiddleware Error]:", error.message);
+    if (error.name === "TokenExpiredError") {
+      return res.status(401).json({
+        success: false,
+        code: "TOKEN_EXPIRED",
+        message: "Session expired. Please log in again.",
+      });
+    }
+
+    console.warn("[AuthMiddleware] Invalid token:", error.message);
     return res.status(401).json({
       success: false,
-      message: "Not authorized, invalid or expired token",
+      code: "INVALID_TOKEN",
+      message: "Not authorized, invalid authentication token",
     });
   }
 };
